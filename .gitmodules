@@ -1,3 +1,8 @@
 [submodule "xgrammar"]
 	path = xgrammar
 	url = https://github.com/leochanj105/xgrammar.git
+[submodule "type-constrained-code-generation/"]
+	url = https://github.com/leochanj105/type-constrained-code-generation.git
+[submodule "type-constrained-code-generation"]
+	path = type-constrained-code-generation
+	url = https://github.com/leochanj105/type-constrained-code-generation.git
