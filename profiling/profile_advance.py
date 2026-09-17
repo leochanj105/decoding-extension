@@ -104,6 +104,15 @@ def load_index(args):
                 continue
             if args.exclude and any(path.startswith(p) for p in args.exclude):
                 continue
+            if args.constrained is not None:
+                if int(row["constrained"]) != args.constrained:
+                    continue
+            if args.model and not any(m in row["model"] for m in args.model):
+                continue
+            if args.task and row["task"] not in args.task:
+                continue
+            if args.dataset and row["dataset"] not in args.dataset:
+                continue
             if chars < args.min_chars:
                 continue
             if args.max_chars and chars > args.max_chars:
@@ -136,6 +145,20 @@ def main():
                          "e.g. programs/google_gemma-2-2b-it/c/")
     ap.add_argument("--exclude", action="append", default=[],
                     help="skip paths starting with this (repeatable)")
+    ap.add_argument("--constrained", dest="constrained", action="store_const", const=1,
+                    default=1,
+                    help="only programs generated with the checker on (the default: "
+                         "these are the only ones the checker ever ran on)")
+    ap.add_argument("--unconstrained", dest="constrained", action="store_const", const=0,
+                    help="only programs generated without the checker")
+    ap.add_argument("--all-programs", dest="constrained", action="store_const", const=None,
+                    help="both constrained and unconstrained")
+    ap.add_argument("--model", action="append", default=[],
+                    help="substring match on model name (repeatable), e.g. gemma-2-2b")
+    ap.add_argument("--task", action="append", default=[],
+                    help="synth | translate | repair-all (repeatable)")
+    ap.add_argument("--dataset", action="append", default=[],
+                    help="mbpp | humaneval (repeatable)")
     ap.add_argument("--min-chars", type=int, default=0)
     ap.add_argument("--max-chars", type=int, default=0, help="0 = no limit")
     ap.add_argument("--limit", type=int, default=0, help="0 = all matching programs")
