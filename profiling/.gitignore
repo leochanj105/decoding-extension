@@ -4,3 +4,6 @@ corpus/
 venv/
 # Timing results are regenerable
 results_*.csv
+# Run logs
+*.log
+__pycache__/
