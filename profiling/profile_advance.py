@@ -53,8 +53,11 @@ def check_one(path, timeout):
     """Run the checker over one program file.
 
     Returns a result dict. status is one of:
-      ok            - checker read the whole program
-      stopped_early - checker rejected something partway through
+      ok            - read the whole program, interpretations still alive
+      rejected      - no interpretation survived; the text cannot be completed into
+                      a type-correct program. Common for programs the model left
+                      truncated when it hit its token limit.
+      stopped_early - stopped before the end of the file
       timeout       - gave up after the time limit
     """
     from typesafe_llm.parser.parser_ts import (
@@ -62,7 +65,10 @@ def check_one(path, timeout):
         incremental_ts_parse,
     )
 
-    text = open(os.path.join(CORPUS_DIR, path)).read()
+    # extract_corpus.py ends each file with a newline the model never generated.
+    # The checker applies automatic semicolon insertion at a newline, which can
+    # reject a program that was merely unfinished, so drop it.
+    text = open(os.path.join(CORPUS_DIR, path)).read().rstrip("\n")
     state = custom_end_initial_state(END_MARKER, {})
 
     signal.signal(signal.SIGALRM, _alarm)
@@ -72,10 +78,18 @@ def check_one(path, timeout):
         result = incremental_ts_parse(state, text)
         seconds = time.perf_counter() - start
         chars_read, states = len(result.parsed_code), len(result)
-        status = "ok" if chars_read >= len(text.rstrip()) else "stopped_early"
+        if states == 0:
+            # No interpretation survived, so the checker refused the text. Reaching
+            # the end of the file does not mean it was accepted.
+            status = "rejected"
+        elif chars_read < len(text):
+            status = "stopped_early"
+        else:
+            status = "ok"
     except Timeout:
         seconds = time.perf_counter() - start
-        chars_read, states, status = 0, 0, "timeout"
+        # states stays blank; 0 would be indistinguishable from a rejection.
+        chars_read, states, status = 0, None, "timeout"
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
 
