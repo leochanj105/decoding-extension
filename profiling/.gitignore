@@ -1,0 +1,4 @@
+# Extracted corpus is regenerable from the submodule via extract_corpus.py
+corpus/
+# Local virtualenv for running the checker (needs Python 3.11)
+venv/
