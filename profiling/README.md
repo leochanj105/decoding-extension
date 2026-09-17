@@ -1,89 +1,84 @@
-# CPU-side profiling of the PLDI'25 type-constrained decoder
+# How fast is the PLDI type checker?
 
-Goal: find where CPU time goes at each decoding step, after the LLM produces logits.
-Everything here runs **without a GPU and without model weights**.
+Their system checks generated code for type errors while the LLM writes it. That
+checking costs CPU time. This measures how much.
 
-## Files
+No GPU and no model weights are needed.
 
-| File | What it is |
-|---|---|
-| `PREREGISTRATION.md` | Procedure + prediction, written **before** running, so the measurement could not be tuned to the expected answer |
-| `profile_advance.py` | Replays recorded programs through the unmodified parser and times it. Exactly the version that produced `advance_log.txt` |
-| `advance_log.txt` | Raw output of that run |
-| `fit_cost_model.py` | Fits a per-token cost model to the paper's recorded `results_paper/*.jsonl` runtimes |
+## The idea
 
-## Setup
+The paper's saved results contain thousands of TypeScript programs their LLM already
+wrote. We take those programs, feed each one to their checker, and time it.
 
-The parser needs Python 3.11 (it uses `typing.Self`). No torch, no GPU.
+This is a direct measurement of real code on real inputs.
+
+## Running it
+
+The checker needs Python 3.11 (it uses `typing.Self`).
 
 ```bash
-python3.11 -m venv venv && ./venv/bin/pip install frozenlist regex termcolor frozendict
-./venv/bin/python profile_advance.py
-python3 fit_cost_model.py
+python3.11 -m venv venv
+./venv/bin/pip install frozenlist regex termcolor frozendict
+./venv/bin/python profile_advance.py        # 10 programs
+./venv/bin/python profile_advance.py 60     # 60 programs
 ```
 
-## What we found
+## Reading the output
 
-**1. Rejected candidates are a minority of the cost.** From the recorded `resamples`
-field: only 4.4% of decoding steps reject anything, but those steps reject a lot —
-12.4M rejected checks against ~1.5M accepted tokens, a ratio of 8.3:1. The fitted cost
-per rejection is ~0.6 ms, putting rejections at roughly 15-20% of constraint cost.
+One line per program:
 
-**2. The full-vocabulary sampling op is not the bottleneck.** `sampling.py` draws
-`multinomial` over the entire vocabulary every step. But fitted constraint cost per
-token stays in the 36-62 ms range across models whose vocabularies differ 8x
-(CodeLlama 32k = 41.8, Gemma 256k = 50.9). A vocabulary-sized op would scale; it doesn't.
+| Column | Meaning |
+|---|---|
+| `chars` | How many characters of the program the checker read |
+| `seconds` | How long that took |
+| `ms/char` | Milliseconds per character — the headline number |
+| `states` | How many possible interpretations the checker was holding at the end |
+| `note` | Flags a program the checker refused to finish reading |
 
-**3. Parser advance dominates — and it is wildly heavy-tailed.** Replaying 10 programs:
-9 ran at ~1 ms/char, 1 ran at 51 ms/char. That one instance was 96% of total time and
-reproduces (51.1s, 53.1s on re-run, load average ~1.0). The cause is the number of
-simultaneous parse interpretations the parser keeps alive: 0 for the fast programs,
-**656** for the slow one. Every character is checked against every live state.
+`states` is the interesting one. The checker does not track a single reading of the
+code. It tracks every reading still possible, because after seeing `foo(` it cannot
+yet know whether that returns a number or a string. Each new character must be
+checked against every interpretation being held. So when this number grows, the
+checker slows down proportionally.
 
-**4. Two independent estimates agree at the aggregate level.**
+## What we found so far
 
-| Source | ms per generated char |
-|---|---:|
-| Replaying the parser on this machine | 16.8 |
-| Fitted from their recorded GPU-run wall-clock times | ~14 |
+Ten programs, on one desktop CPU:
 
-These share no inputs, so the agreement is meaningful — but it rests on one dominating
-instance, so treat it as provisional.
+- Nine ran at roughly **1 ms per character**.
+- One ran at **51 ms per character** — about 60x slower. It was holding **656**
+  interpretations at once. That single program was 96% of the total time.
 
-**5. The global reachability cache barely matters here.** Cold vs warm differed by 3.5%.
+It was not a fluke: re-running it twice gave 51.1s and 53.1s with the machine
+otherwise idle.
 
-## Correction to the pre-registration
+So the cost is usually small and occasionally enormous. A single average figure hides
+this and should not be quoted on its own.
 
-`PREREGISTRATION.md` predicted 4-10 ms/char. That band was **mis-derived**: it used the
-`compilable` field's length, which turns out to be ~56% appended test-harness code the
-model never generated. Correcting for that raises the prediction to ~14 ms/char, which
-the measured aggregate (16.8) matches. The error was found during the run, not after,
-and the prediction is left unedited in the file as written.
+## What is still unknown
 
-Note the measured **median** is 0.85 ms/char, far below both. Median and aggregate
-disagree by 20x because the distribution is dominated by rare expensive positions.
-Quoting a single "ms per token" number for this system is misleading.
+The nine fast programs were all short, 120-340 characters. The slow one was the only
+long one. So we cannot yet tell the difference between:
 
-## Open question
+- that one program being unusual, versus
+- every program becoming slow once it gets long enough.
 
-Is the 656-state blow-up a rare pathological program, or does every program reach it
-once long enough? The 9 fast programs were short (120-340 chars); the slow one was the
-only one exceeding 1000 chars, and it hit the script's cap so its true cost is still
-unmeasured.
+Running more programs answers this. That is the only reason to pass a larger number
+to the script.
 
-To answer: raise `N_INSTANCES` to ~60, remove `MAX_CHARS`, and stop parsing at
-`TEST_MARKER` so exactly the generated program is measured.
+## Two things this script fixes
+
+An earlier version of this measurement had two flaws, both corrected here:
+
+1. **It stopped after 1000 characters** to bound runtime. The slow program hit that
+   limit, so its real cost was never measured. There is no limit now.
+2. **It fed in text the LLM never wrote.** The saved `compilable` field is the LLM's
+   program with the benchmark's own correctness tests appended — roughly half the
+   text. The script now cuts at `declare var require`, where those tests begin.
 
 ## Caveats
 
-- Token counts are estimated as characters / 3.5; exact counts are not stored.
-- This machine's CPU differs from the paper's.
-- `fit_cost_model.py` infers constraint cost from a difference of wall-clock totals, so
-  it absorbs any other constrained-vs-unconstrained difference. The gemma-2 runs set
-  `use_cache=False` (`sampling.py:144`), making model time quadratic in length; the
-  script offers a quadratic term to check that this is not what `a` is absorbing.
-- The quadratic variant is itself unreliable: for gemma-2-27b it fits a **negative**
-  forward cost (m = -31.9 ms/tok), which is physically impossible and indicates
-  collinearity between T and T^2 at these sample sizes. Treat `a` as an order-of-
-  magnitude estimate, not a precise value. The direct replay in `profile_advance.py`
-  is the more trustworthy measurement.
+- Timings come from this desktop, not the paper's machines.
+- This measures the checker reading code that was already accepted. During real
+  generation it also checks candidate tokens that get rejected, which is extra work
+  not measured here.
