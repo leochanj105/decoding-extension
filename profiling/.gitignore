@@ -9,3 +9,4 @@ results_*.csv
 __pycache__/
 # Tokenizer used to define decoding steps (7MB, downloaded)
 tok.json
+reach_*.csv
