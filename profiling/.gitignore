@@ -7,3 +7,5 @@ results_*.csv
 # Run logs
 *.log
 __pycache__/
+# Tokenizer used to define decoding steps (7MB, downloaded)
+tok.json
