@@ -25,14 +25,14 @@ so our mask will sometimes be more permissive, correctly.
 
 ## P1 — Type reachability, which turns out to be fully static
 
-While higher-order methods are excluded, the type universe is **finite and known
-before generation starts**: every type is built from the six base types, `declare
-function` signatures are unary, and the member tables are fixed. Nothing about it
-depends on what a program declares.
+The type universe is **finite and known before generation starts**: every type is
+built from the six base types, `declare function` signatures are unary, and the
+member tables are fixed. Nothing about it depends on what a program declares.
 
-That ends when `map`, `filter` and `reduce` are added back, since their edges need
-a callback the fragment cannot write except by naming a declared function. Adding
-them unconditionally makes the graph 100% dense and the filter useless.
+It is also **100% dense** -- every type reaches every other -- because TypeScript
+converts anything to anything. So this phase is nearly free and nearly useless as a
+filter, and P3 must take its selectivity from the exact required type at completion
+points and from the receiver's members after a dot. See FRAGMENT.md.
 
 So reachability is not environment-dependent at all. Close the universe, compute
 the transitive closure once, and every later question is a bit test. Measured on

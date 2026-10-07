@@ -124,16 +124,27 @@ Syntax masks per grammar position; the per-precedence-window operator tables; th
 per-type masks for built-in symbols; and — for the fragment in FRAGMENT.md — the
 *entire* type reachability relation.
 
-That last one holds only while higher-order methods are excluded. The fragment's
-type universe is then finite and known before generation starts -- 125 types, 766
-edges, a 4 KB bitset table closed in 4 rounds in 10 ms, for all programs -- and
-every reachability question is a bit test.
+That last one is static, and also nearly worthless, which changes where the masks
+get their selectivity.
 
-It stops holding as soon as `map`, `filter` or `reduce` come back. Those reach a new
-type only by supplying a callback, and the fragment has no arrow functions, so the
-edge exists only once a `declare function` of the right type is in scope. Adding
-them unconditionally makes the graph 100% dense and the filter useless; adding them
-properly moves reachability into B, where insert-only incremental closure applies.
+The universe is finite and known before generation starts -- 153 types, 934 edges, a
+6 KB table closed in 4 rounds in 27 ms, for every program. But it comes out **100%
+dense**: every type reaches every other, because TypeScript converts anything to
+anything (`numbers.map(someStr.charAt)` is a `string[]`). So "which types reach the
+goal" answers *all of them*, and a mask cannot get selectivity from it.
+
+The selectivity comes from two other places, and the per-type masks should be
+indexed by these instead:
+
+1. **The exact required type at a completion point.** At `let s: string = x|` the
+   token `;` is illegal: ending here requires the expression to *be* a string, not
+   merely to be convertible to one. Nearly all type filtering lives here.
+2. **The receiver's members after a dot.** At `someStr.|` only `string`'s members
+   are legal. Highly selective, and dependent on the receiver's type, so it cannot
+   be precompiled per grammar position.
+
+Reachability is still needed, but only to answer "is this prefix doomed yet?", whose
+answer is nearly always no. That is cheap to be right about.
 
 **B. Environment-dependent** — recomputed when a declaration lands.
 One per-type mask, for the one affected type. Nothing else: no closure update, no

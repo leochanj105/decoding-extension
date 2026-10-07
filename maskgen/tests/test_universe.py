@@ -27,8 +27,8 @@ def universe(depth=2):
 def test_sizes_match_the_measurement():
     u = universe(2)
     print(f"      {u.describe()}")
-    assert len(u) == 125, len(u)
-    assert len(u.edges) == 766, len(u.edges)
+    assert len(u) == 153, len(u)
+    assert len(u.edges) == 934, len(u.edges)
 
 
 def test_the_six_types_are_present():
@@ -77,24 +77,37 @@ def test_inverse_agrees_with_forward():
     assert total_forward == total_inverse
 
 
-def test_the_filter_actually_filters():
-    """Not every type may reach every goal, or the filter selects nothing.
+def test_reachability_is_totally_connected():
+    """Every type reaches every other, and that is the truth, not a bug.
 
-    This caught a real error: adding monomorphic map/filter/reduce as unconditional
-    edges made the graph 100% dense. Those edges need a callback, and the fragment
-    has no arrow functions, so they belong to the environment rather than the static
-    graph. See the fragment+ho mode in type_graph.py.
+    TypeScript converts anything to anything: numbers.map(someStr.charAt) is a
+    string[], booleans.join(",").split(",") walks booleans to strings. Admitting a
+    higher-order edge only when its callback type is independently obtainable still
+    lands here, so the table filters nothing.
+
+    Pinned as a test because it is the single most consequential fact about the
+    design: a mask cannot get its selectivity from reachability. If a future change
+    makes this fail, the filtering story changes with it.
     """
     u = universe(2)
-    sizes = [bin(u.sources_reaching(g)).count("1") for g in range(len(u))]
-    assert min(sizes) >= 1, "a type must at least reach itself"
-    assert min(sizes) < len(u), "every type reaches some goal -- the filter is useless"
     pairs = sum(bin(r).count("1") for r in u.reach)
     density = 100.0 * pairs / (len(u) ** 2)
-    print(f"      sources per goal: min {min(sizes)}, "
-          f"median {sorted(sizes)[len(sizes)//2]}, max {max(sizes)} of {len(u)}; "
-          f"{density:.0f}% dense")
-    assert density < 95.0, f"{density:.0f}% dense leaves almost nothing filtered"
+    print(f"      {density:.0f}% dense -- reachability excludes nothing")
+    assert density == 100.0, f"{density:.1f}% -- see FRAGMENT.md, this was 100%"
+
+
+def test_restricted_graph_does_filter():
+    """Without higher-order methods the table does filter, at 76%.
+
+    Kept to show the contrast: the restriction is what creates filtering, and PLDI's
+    own 45% comes from being restricted in a similar way.
+    """
+    u = TypeUniverse.for_fragment(max_depth=2, higher_order=False)
+    pairs = sum(bin(r).count("1") for r in u.reach)
+    density = 100.0 * pairs / (len(u) ** 2)
+    print(f"      {len(u)} types, {density:.0f}% dense")
+    assert len(u) == 125, len(u)
+    assert 70.0 < density < 80.0, density
 
 
 if __name__ == "__main__":

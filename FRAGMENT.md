@@ -95,33 +95,60 @@ branches**: `split(string | RegExp)` becomes `split(string)`, which is the commo
 case and the only thing that keeps `string -> string[]` reachable at all. The same
 move recovers `replace`, `replaceAll` and `search`.
 
-### Higher-order methods are environment-dependent, not static
+### Reachability does not filter, and that is a fact about TypeScript
 
-`map`, `filter`, `reduce`, `some` and `every` are excluded from the static graph,
-and the last row shows why: adding them makes the graph **100% dense**, so every
-type reaches every goal and the type filter selects nothing.
+`map`, `filter` and `reduce` make the graph **100% dense**: every type reaches every
+other type, so asking "can this type still become the goal type?" always answers
+yes.
 
-That is not a measurement artefact, it is the fragment's own rule. `number[].map`
-reaches `string[]` only by supplying a `(number) => string` callback, and the
-fragment has no arrow functions -- the only way to obtain a function value is to
-name a `declare function`. So the edge exists only once such a function has been
-declared. It belongs to the environment, not to the static universe.
+The first instinct was that this was a modelling error, because `map` needs a
+callback and the fragment has no arrow functions. It is not. A callback can be a
+*method reference*: `someStr.charAt` is already a `(number) => string`, so
+`numbers.map(someStr.charAt)` is a `string[]`. Conditioning each higher-order edge
+on its callback type being independently reachable -- a fixpoint, since new edges
+make new function types reachable -- still settles at 100% dense after three rounds,
+with 146 function types obtainable from method references alone. And even without
+`map`, `booleans.join(",").split(",")` walks from booleans to strings.
 
-They are kept in a separate mode (`fragment+ho`) to be added back deliberately,
-at which point type reachability stops being static and has to be maintained
-incrementally.
+| | types | edges | density |
+|---|---:|---:|---:|
+| PLDI full environment | 396 | 2,371 | 44.9% |
+| members within the six only | 101 | 621 | 40.9% |
+| the fragment without higher-order methods | 125 | 766 | 76.0% |
+| **the fragment as specified** | **153** | **934** | **100%** |
 
-### What the density means
+So in TypeScript essentially every type is convertible to every other, and a
+reachability filter is vacuous. This explains an earlier measurement that looked
+odd: of PLDI's 86,106 reachability queries on one program, 99.8% did no search work
+and 75% had a goal of `unknown`. They were asking a question whose answer is almost
+always yes.
 
-At 76% the static filter rejects only about a quarter of (source, goal) pairs, so
-it is weak at the *start* of an expression. That is correct and matches PLDI: at
-`let s: string = |` it allows `x` even when `x` is a number, because `x.toString()`
-is a string. The constraint bites when the expression must **end** -- `x;` is
-rejected -- and a completion position demands an exact type, not reachability.
+**PLDI's own graph filters only because it is incomplete.** At 44.9% it rejects
+pairs that are genuinely reachable in TypeScript, because its reachability ignores
+generic instantiation (it handles that lazily during the parse instead) and because
+`_reachable_bfs` gives up after 1000 iterations and reports "not reachable". Both
+make it stricter than the language.
 
-So the value of the design is not a strong reachability filter. It is doing the
-whole job, syntax and types, at both expression start and completion, as a mask
-lookup rather than a per-candidate parse.
+### Where the filtering actually comes from
+
+If reachability admits everything, the constraint must bite elsewhere. Three places,
+in order of how much they filter:
+
+1. **Exact type at a completion point.** At `let s: string = x|` the token `;` is
+   illegal, because ending here requires the expression to *be* a string, not merely
+   to be convertible to one. This is where nearly all the type filtering lives.
+2. **The member namespace after a dot.** At `someStr.|` only `string`'s members are
+   legal -- a few dozen names out of everything in scope. Highly selective, and it
+   depends on the receiver's type, so it cannot be precompiled per grammar position.
+3. **Syntax**, which XGrammar already handles.
+
+What reachability is still needed for is *not* rejecting: it is knowing that a
+prefix is not yet doomed, so `x` may be written at a string position. Since the
+answer is nearly always yes, that is cheap to answer and cheap to be right about.
+
+So the per-type masks in DESIGN.md should be indexed by the exact required type at
+completion points and by the receiver type at member positions -- not by the set of
+types that reach a goal, which is every type.
 
 The remaining gap to PLDI is their 24 default global objects (`Math`, `console`,
 `JSON`) and the types they pull in. Closing it is pure porting of more member

@@ -143,6 +143,78 @@ def members_narrowed(typ) -> set:
     return out
 
 
+def higher_order_given(typ, obtainable) -> set:
+    """Higher-order array methods whose callback type is actually obtainable.
+
+    `number[].map` reaches `string[]` only with a `(number) => string` value. In the
+    fragment that can come from a declared function *or* from a method reference --
+    `someStr.charAt` is already a `(number) => string` -- so the edge is real exactly
+    when that function type is itself reachable. Deciding that is a fixpoint, since
+    adding map edges can make further function types reachable.
+    """
+    if not isinstance(typ, ArrayPType):
+        return set()
+    elem = typ.element_type
+    out = set()
+    for result in base_types():
+        if _fn([elem], result) in obtainable:
+            out.add(_fn([_fn([elem], result)], ArrayPType(result)))
+        if _fn([result, elem], result) in obtainable:
+            out.add(_fn([_fn([result, elem], result), result], result))
+    predicate = _fn([elem], BooleanPType())
+    if predicate in obtainable:
+        out.add(_fn([predicate], typ))
+        out.add(_fn([predicate], BooleanPType()))
+    return out
+
+
+def close_with_callbacks(max_depth: int, max_rounds: int = 8):
+    """Closure where higher-order edges appear only once their callback exists.
+
+    Returns (types, edges, rounds). Measured result: still totally connected, so
+    conditioning the edges changes nothing -- the callbacks genuinely are available.
+    """
+    obtainable: set = set()
+    types, edges, rounds = set(), set(), 0
+    for rounds in range(1, max_rounds + 1):
+        have = frozenset(obtainable)
+        table = dict(OPERATOR_REACHABLE_TYPE_MAP)
+        table["p.x"] = lambda t: members_narrowed(t) | higher_order_given(t, have)
+        types, raw, capped = _close_with_table(table, six_types(), max_depth)
+        edges = {(a, o, b) for a, o, b in raw}
+        functions = {t for t in types if isinstance(t, FunctionPType)}
+        if functions <= obtainable:
+            break
+        obtainable |= functions
+    return types, edges, rounds
+
+
+def reachability_density(types, edges) -> float:
+    """Percentage of (source, goal) pairs that are reachable. 100 means no filtering."""
+    ids = {t: i for i, t in enumerate(sorted(types, key=str))}
+    n = len(ids)
+    if n == 0:
+        return 0.0
+    step = [1 << i for i in range(n)]
+    for a, _operator, b in edges:
+        if a in ids and b in ids:
+            step[ids[a]] |= 1 << ids[b]
+    changed = True
+    while changed:
+        changed = False
+        for i in range(n):
+            acc = step[i]
+            rest = acc
+            while rest:
+                j = (rest & -rest).bit_length() - 1
+                rest &= rest - 1
+                acc |= step[j]
+            if acc != step[i]:
+                step[i] = acc
+                changed = True
+    return 100.0 * sum(bin(x).count("1") for x in step) / (n * n)
+
+
 def members_within_six(typ) -> set:
     """Member types, dropping any member whose signature leaves the six types.
 
@@ -205,7 +277,11 @@ def close_over(seeds, max_depth: int, step_cap: int = 400000, mode: str = "full"
     Returns (types, edges, capped) where edges is a list of (source, operator,
     target).
     """
-    table = edge_table(mode)
+    return _close_with_table(edge_table(mode), seeds, max_depth, step_cap)
+
+
+def _close_with_table(table, seeds, max_depth: int, step_cap: int = 400000):
+    """The traversal itself, given an edge table."""
     seen, queue, edges = set(), [], []
     for typ in seeds:
         if within(typ, max_depth) and typ not in seen:
