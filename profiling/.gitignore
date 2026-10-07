@@ -10,3 +10,5 @@ __pycache__/
 # Tokenizer used to define decoding steps (7MB, downloaded)
 tok.json
 reach_*.csv
+# Regenerable by measure_symbol_masks.py
+symbol_masks_*.csv
