@@ -129,6 +129,24 @@ values the fragment can produce are declared functions and method references, an
 none has the shape `reduce` needs, so the edge does not exist. An ungated graph
 claimed it did, via a `reduce` whose callback nothing could write.
 
+### Two checks, with opposite answers
+
+A mask has to answer two questions at a typed position, and they are not the same.
+
+**"Can this position be finished at all?"** -- always yes. All 125 types in the
+universe are constructible from literals alone: each of the six base types has a
+literal, and everything else is reachable from one. So no typed position is ever a
+dead end, and this check is vacuous. It can be deleted rather than computed.
+
+A corollary: there is no need for a symbol of each type to be in scope. Literals
+cover every type, so a position is satisfiable with an empty environment. Symbol
+availability decides only *which identifiers* appear in the mask.
+
+**"Given a partial expression of type T, can G still be reached?"** -- 58% yes. From
+a committed `number`, 60 of the 125 goals are unreachable. This is the real filter,
+and it bites the moment anything is committed: at a `number[]` position the literal
+`5` is already illegal, because `number` does not reach `number[]`.
+
 ### Where the filtering comes from
 
 Reachability excludes about 42% of pairs, so it does real work -- but it is only part

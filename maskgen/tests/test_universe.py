@@ -99,6 +99,38 @@ def test_a_number_does_not_become_an_array_of_numbers():
     assert u.reaches(num, strings), 'number -> string[] via (5 + "").split(",")'
 
 
+def test_every_type_is_constructible_from_literals():
+    """No typed position is ever a dead end, so "can this be finished?" is always yes.
+
+    Every one of the six base types has a literal, and everything else in the universe
+    is reachable from one, so any required type can be produced from nothing. That
+    makes the "is there any completion here?" check vacuous and deletable.
+
+    What is *not* vacuous is the other check: once a partial expression has committed
+    to a type T, only 58% of goals remain reachable. At a number[] position the
+    literal 5 is already illegal, because number does not reach number[].
+    """
+    u = universe(2)
+    from maskgen.type_graph import six_types
+
+    constructible = 0
+    for seed in six_types():
+        constructible |= u.reach[u.id_of(seed)]
+    built = bin(constructible).count("1")
+    print(f"      {built}/{len(u)} types constructible from literals alone")
+    assert built == len(u), f"only {built} of {len(u)} types can be written"
+
+
+def test_committing_to_a_type_does_exclude_goals():
+    """The filter bites once a type is committed, not before."""
+    u = universe(2)
+    num = u.id_of(NumberPType())
+    reachable = bin(u.reach[num]).count("1")
+    print(f"      from a committed number, {reachable}/{len(u)} goals remain")
+    assert reachable < len(u), "a committed number should not reach every goal"
+    assert not u.reaches(num, u.id_of(ArrayPType(NumberPType())))
+
+
 def test_reachability_filters_a_real_share():
     """Reachability must exclude a substantial fraction, or it is doing no work."""
     u = universe(2)
