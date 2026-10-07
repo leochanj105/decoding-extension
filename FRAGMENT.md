@@ -78,26 +78,48 @@ None of these add type-transition edges. All of them add parsing.
 
 ## How much of the type graph this keeps
 
-`maskgen/type_graph.py`, closing over PLDI's own edge functions:
+`maskgen/type_graph.py --max-depth 2`, closing over PLDI's own edge functions:
 
-| nesting depth | PLDI built-in environment | this fragment | kept |
+| nesting depth | PLDI built-in environment | members within the six only | **the fragment** |
 |---|---|---|---|
-| <= 1 | 141 types, 810 edges | 102, 626 | 72% / 77% |
-| <= 2 | 396 types, 2,344 edges | 239, 1,453 | **60% / 62%** |
+| <= 1 | 141 types, 810 edges | 54 / 339  (38% / 42%) | **77 / 477  (55% / 59%)** |
+| <= 2 | 396 types, 2,344 edges | 101 / 621  (26% / 26%) | **147 / 897  (37% / 38%)** |
 
-Average out-degree is 6.1 against 5.9, so the shape of the graph is preserved and
-only its size differs. The missing 40% is PLDI's 24 default global objects
-(`Math`, `console`, `JSON` and so on) and the types they drag in; adding one or two
-of them later would close most of the gap without new machinery.
+The middle column is what happens if every member whose signature mentions a type
+outside the six is simply dropped. Counting the tables, 127 of 160 members (79%)
+already stay inside, so only 21% are affected -- but they carry more than half the
+graph, because the array methods they contain take callbacks.
 
-Edges by kind at depth 2: member access 1,167, `+` 398, `==` 396, calls 362,
-indexing 11, logical and ternary 18 each.
+The right column adds those methods back by **instantiating them at concrete
+types**: `number[].map` with a `(number) => string` callback yields `string[]`.
+Nine instantiations per array type replace one generic signature. This is the same
+trick that turns `push` into `(number) => number`, applied to `map`, `filter`,
+`reduce`, `some` and `every`, and it recovers the graph from 26% to 37%.
+
+So the fragment keeps roughly **37% of the types and 38% of the edges** of PLDI's
+full environment at nesting depth 2, in absolute terms 147 types and 897 edges.
+Edges by kind at depth 2 for the full environment: member access 1,167, `+` 398,
+`==` 396, calls 362, indexing 11, logical and ternary 18 each.
+
+The remaining gap is PLDI's 24 default global objects (`Math`, `console`, `JSON`
+and so on) and the types they drag in. Closing it is pure porting of more member
+tables and needs no new mechanism, so it is a lever to pull if 37% proves too thin
+rather than a design problem.
+
+Two things this is *not* explained by:
+
+- **Not the `any` wildcard.** Only 6% of PLDI's edges at depth 2 touch `any` or
+  `unknown`; 2,207 of 2,344 run between concrete types. An earlier guess that their
+  count was inflated by a vacuous wildcard was wrong.
+- **Not nesting depth.** The three columns are compared at equal depth throughout.
 
 ## Caveats
 
 - The counts close over PLDI's member tables from our six seed types, so they
-  describe the fragment *as specified* -- with their tables ported. Trimming the
-  tables trims the graph proportionally.
+  describe the fragment *as specified*. An earlier version of this file claimed
+  60% / 62%; that measurement kept every member, including the generic `map`,
+  `filter` and `reduce` that the fragment excludes, so it was not self-consistent.
+  The figures above are.
 - The graph is infinite without a depth bound, so only equal-depth comparisons
   mean anything.
 - Nothing here is validated against generated code yet. Whether models can write

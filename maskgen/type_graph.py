@@ -32,10 +32,102 @@ if REPO not in sys.path:
 from typesafe_llm.parser import types_ts  # noqa: E402
 from typesafe_llm.parser.types_ts import (  # noqa: E402
     OPERATOR_REACHABLE_TYPE_MAP,
+    ArrayPType,
     BooleanPType,
+    FunctionPType,
     NumberPType,
     StringPType,
 )
+
+
+def base_types():
+    return [NumberPType(), StringPType(), BooleanPType()]
+
+
+def six_types():
+    """The fragment's types: three primitives and arrays of them."""
+    base = base_types()
+    return base + [ArrayPType(t) for t in base]
+
+
+_SIX_NAMES = {str(t) for t in six_types()}
+
+
+def types_mentioned(typ, seen=None) -> set:
+    """Every atomic type name appearing anywhere inside `typ`."""
+    seen = seen if seen is not None else set()
+    if id(typ) in seen:
+        return set()
+    seen.add(id(typ))
+    if isinstance(typ, ArrayPType):
+        return types_mentioned(typ.element_type, seen)
+    if isinstance(typ, FunctionPType):
+        out = set()
+        for param in getattr(typ, "call_signature", ()) or ():
+            out |= types_mentioned(param, seen)
+        return out | types_mentioned(typ.return_type, seen)
+    return {str(typ)}
+
+
+def _fn(params, ret):
+    return FunctionPType(call_signature=tuple(params), return_type=ret)
+
+
+def monomorphic_higher_order(typ) -> set:
+    """Generic array methods instantiated at concrete types, so no type parameters.
+
+    `number[].map` with a `(number) => string` callback yields `string[]`. Nine
+    instantiations per array type replace one generic signature, which is the same
+    trick the fragment already uses to turn `push` into `(number) => number`.
+    """
+    if not isinstance(typ, ArrayPType):
+        return set()
+    elem = typ.element_type
+    out = set()
+    for result in base_types():
+        out.add(_fn([_fn([elem], result)], ArrayPType(result)))        # map
+        out.add(_fn([_fn([result, elem], result), result], result))    # reduce
+    predicate = _fn([elem], BooleanPType())
+    out.add(_fn([predicate], typ))                                    # filter
+    out.add(_fn([predicate], BooleanPType()))                         # some / every
+    return out
+
+
+def members_within_six(typ) -> set:
+    """Member types, dropping any member whose signature leaves the six types.
+
+    What this drops is what the fragment already excludes: the arrays' generic
+    methods (typed with `T` and `any`) and string's RegExp and union members.
+    """
+    try:
+        attributes = typ.attributes
+    except Exception:
+        return set()
+    out = set()
+    for entry in attributes.values():
+        member = entry[0] if isinstance(entry, tuple) else entry
+        if not (types_mentioned(member) - _SIX_NAMES):
+            out.add(member)
+    return out
+
+
+def edge_table(mode: str) -> dict:
+    """The eight edge functions, with member access varied by `mode`.
+
+    full        PLDI's member tables as they are
+    within-six  only members whose signatures stay inside the six types
+    fragment    those, plus monomorphic instantiations of the generic methods
+    """
+    table = dict(OPERATOR_REACHABLE_TYPE_MAP)
+    if mode == "full":
+        return table
+    if mode == "within-six":
+        table["p.x"] = members_within_six
+    elif mode == "fragment":
+        table["p.x"] = lambda t: members_within_six(t) | monomorphic_higher_order(t)
+    else:
+        raise ValueError(mode)
+    return table
 
 
 def within(typ, max_depth: int) -> bool:
@@ -46,11 +138,13 @@ def within(typ, max_depth: int) -> bool:
     return arrays <= max_depth and functions <= max_depth
 
 
-def close_over(seeds, max_depth: int, step_cap: int = 200000):
+def close_over(seeds, max_depth: int, step_cap: int = 400000, mode: str = "full"):
     """Every type reachable from `seeds`, and every edge, within the depth bound.
 
-    Returns (types, edges) where edges is a list of (source, operator, target).
+    Returns (types, edges, capped) where edges is a list of (source, operator,
+    target).
     """
+    table = edge_table(mode)
     seen, queue, edges = set(), [], []
     for typ in seeds:
         if within(typ, max_depth) and typ not in seen:
@@ -60,7 +154,7 @@ def close_over(seeds, max_depth: int, step_cap: int = 200000):
     steps = 0
     while queue and steps < step_cap:
         src = queue.pop()
-        for operator, successors_of in OPERATOR_REACHABLE_TYPE_MAP.items():
+        for operator, successors_of in table.items():
             try:
                 successors = successors_of(src)
             except Exception:
@@ -77,7 +171,7 @@ def close_over(seeds, max_depth: int, step_cap: int = 200000):
 
 
 def primitive_seeds():
-    return [NumberPType(), StringPType(), BooleanPType()]
+    return base_types()
 
 
 def builtin_seeds():
@@ -94,14 +188,11 @@ def builtin_seeds():
 
 def subset_seeds():
     """The types our subset declares: three primitives and arrays of them."""
-    from typesafe_llm.parser.types_ts import ArrayPType
-
-    base = primitive_seeds()
-    return base + [ArrayPType(t) for t in base]
+    return six_types()
 
 
-def report(name: str, seeds, max_depth: int) -> dict:
-    types, edges, capped = close_over(seeds, max_depth)
+def report(name: str, seeds, max_depth: int, mode: str = "full") -> dict:
+    types, edges, capped = close_over(seeds, max_depth, mode=mode)
     by_operator = collections.Counter(op for _, op, _ in edges)
     distinct = {(str(a), op, str(b)) for a, op, b in edges}
     print(f"\n{name}, nesting depth <= {max_depth}")
@@ -124,11 +215,17 @@ def main() -> None:
     print(f"PLDI puts {n_globals} names in scope by default")
 
     for depth in range(args.max_depth + 1):
-        full = report("PLDI built-in environment", builtins_, depth)
-        ours = report("our subset (primitives + arrays)", subset_seeds(), depth)
-        if full["types"]:
-            print(f"\n  subset / full : types {ours['types']/full['types']:.0%}, "
-                  f"edges {ours['edges']/max(1,full['edges']):.0%}")
+        full = report("PLDI built-in environment", builtins_, depth, "full")
+        strict = report("six types, members within the six only",
+                        subset_seeds(), depth, "within-six")
+        frag = report("six types + monomorphic generic methods (THE FRAGMENT)",
+                      subset_seeds(), depth, "fragment")
+        if not full["types"]:
+            continue
+        print(f"\n  share of PLDI's graph at depth <= {depth}")
+        for label, got in (("within-six only", strict), ("the fragment", frag)):
+            print(f"      {label:18} types {got['types']/full['types']:.0%}, "
+                  f"edges {got['edges']/max(1,full['edges']):.0%}")
 
 
 if __name__ == "__main__":
