@@ -377,6 +377,69 @@ machinery. Not a recompile and not a new parser.
 Everything else — literals, keywords, punctuation, nesting — stays compiled and
 untouched.
 
+## The target: requirements carried on grammar elements
+
+The design above gets the required type to the identifier position by one of two
+routes. The one that scales is to carry the requirement on the parser state, and the
+general form of that is worth writing down now because it shapes the extension.
+
+**Each grammar element carries a residual requirement, and an expansion is allowed
+only if the requirement can still be cleared.**
+
+That is constraint logic programming with tabling, and the correspondence is exact
+enough to be useful:
+
+| CLP | here |
+|---|---|
+| a goal plus a constraint store | a grammar element plus its residual requirement |
+| a derivation step | expanding a grammar rule |
+| the store stays satisfiable | the requirement can still be cleared |
+| tabling a subgoal | memoising (element, requirement) -> allowed tokens |
+
+The last row is the important one: **the table is the mask cache.** XGrammar already
+caches masks keyed by grammar position; this keys them by position *and* residual
+requirement. Whether that is affordable is an empirical question, and the answer
+looks good: on one program PLDI's 86,106 reachability queries collapsed to 76
+distinct (type, goal) pairs and 253 distinct full keys. A few hundred table entries
+per program is nothing.
+
+Two properties of type requirements, both measured, make them well behaved here:
+
+- **At a fresh position the store is always satisfiable.** Every type in the
+  universe is constructible from literals, so a requirement can always be cleared
+  and no expansion is ever blocked for want of an inhabitant.
+- **Committing narrows it.** Once a sub-expression has a type, 42% of goals become
+  unreachable, so the store does real pruning from the first token onward.
+
+Generalising past types is then a matter of what the residual is. For a refinement
+like `X + Y <= 20` with `X = 10` the residual is `Y <= 10`, clearing is satisfiability,
+and the table keys on the formula. The machinery does not change; only the hit rate
+and the cost of deciding "can this be cleared" do.
+
+## Building it: the dynamic lexicon first
+
+The first increment is the identifier placeholder alone, with the required type taken
+from the grammar position (`let x : T = ...`) rather than from a requirement field.
+That exercises the hook against XGrammar's real mask code before any state is
+carried.
+
+XGrammar turns out to contain the needed mechanism already. `grammar_matcher.cc:840`
+takes a state, maps its `rule_start_pos` to a byte offset, slices the input from
+there to the current end -- correctly spanning both committed `accepted_bytes_` and
+the speculative `temporary_input_bytes_` used while trialling a token -- and walks
+those bytes through an FSM, caching progress per rule occurrence. A dynamic lexicon
+is that same shape with a trie of permitted names in place of the FSM.
+
+Three pieces, in order:
+
+1. A registry mapping a tag to the names currently permitted for it, and the mask for
+   a given (tag, prefix). New file, no XGrammar coupling beyond `TokenizerInfo`.
+2. Recognition of lexicon rules by name convention (`__lex_<tag>`), resolved to rule
+   ids at compile time. A convention avoids touching the grammar syntax, parser,
+   printer and serialiser for a prototype.
+3. A branch in `FillBitmaskForStates`, plus `ShouldTrackAcceptedBytes()` gaining a
+   disjunct so byte tracking is enabled only when a lexicon rule is present.
+
 ## Unresolved
 
 - **Mid-identifier positions.** The per-type masks as measured cover identifier
