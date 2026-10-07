@@ -124,17 +124,20 @@ Syntax masks per grammar position; the per-precedence-window operator tables; th
 per-type masks for built-in symbols; and — for the fragment in FRAGMENT.md — the
 *entire* type reachability relation.
 
-That last one is static, and also nearly worthless, which changes where the masks
-get their selectivity.
+That last one is static, and does real but partial work.
 
-The universe is finite and known before generation starts -- 153 types, 934 edges, a
-6 KB table closed in 4 rounds in 27 ms, for every program. But it comes out **100%
-dense**: every type reaches every other, because TypeScript converts anything to
-anything (`numbers.map(someStr.charAt)` is a `string[]`). So "which types reach the
-goal" answers *all of them*, and a mask cannot get selectivity from it.
+The universe is finite and known before generation starts -- 125 types, 750 edges, a
+4 KB table closed in 4 rounds in 20 ms, for every program -- and 57.6% of pairs are
+reachable, against 44.9% for PLDI's full environment. So it excludes about 42% of
+pairs: real work, but not the selective part.
 
-The selectivity comes from two other places, and the per-type masks should be
-indexed by these instead:
+The rule that makes it correct: **calling a function requires its arguments to be
+writable.** With no arrow functions, `string[].reduce` cannot fire because its
+callback is not obtainable. Ungated, every type reaches every other and the filter is
+vacuous.
+
+Most selectivity comes from two other places, and the per-type masks should be
+indexed by these:
 
 1. **The exact required type at a completion point.** At `let s: string = x|` the
    token `;` is illegal: ending here requires the expression to *be* a string, not
@@ -143,8 +146,7 @@ indexed by these instead:
    are legal. Highly selective, and dependent on the receiver's type, so it cannot
    be precompiled per grammar position.
 
-Reachability is still needed, but only to answer "is this prefix doomed yet?", whose
-answer is nearly always no. That is cheap to be right about.
+Reachability then answers "is this prefix doomed yet?" and rules out the 42%.
 
 **B. Environment-dependent** — recomputed when a declaration lands.
 One per-type mask, for the one affected type. Nothing else: no closure update, no

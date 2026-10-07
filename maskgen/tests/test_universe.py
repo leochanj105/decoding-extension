@@ -27,8 +27,8 @@ def universe(depth=2):
 def test_sizes_match_the_measurement():
     u = universe(2)
     print(f"      {u.describe()}")
-    assert len(u) == 153, len(u)
-    assert len(u.edges) == 934, len(u.edges)
+    assert len(u) == 125, len(u)
+    assert len(u.edges) == 750, len(u.edges)
 
 
 def test_the_six_types_are_present():
@@ -77,37 +77,48 @@ def test_inverse_agrees_with_forward():
     assert total_forward == total_inverse
 
 
-def test_reachability_is_totally_connected():
-    """Every type reaches every other, and that is the truth, not a bug.
+def test_a_number_does_not_become_an_array_of_numbers():
+    """The test that caught three wrong conclusions in a row.
 
-    TypeScript converts anything to anything: numbers.map(someStr.charAt) is a
-    string[], booleans.join(",").split(",") walks booleans to strings. Admitting a
-    higher-order edge only when its callback type is independently obtainable still
-    lands here, so the table filters nothing.
+    Nothing in the fragment turns a number into a number[]. Reaching one needs
+    `map` or `reduce` with a callback, and with no arrow functions the only function
+    values available are declared functions and method references, none of which has
+    the required shape.
 
-    Pinned as a test because it is the single most consequential fact about the
-    design: a mask cannot get its selectivity from reachability. If a future change
-    makes this fail, the filtering story changes with it.
+    A number *does* reach string[], via (5 + "").split(","), which needs no callback.
+
+    Leaving calls ungated -- treating a method's type as reachable without checking
+    its arguments can be written -- makes every type reach every other and the whole
+    type filter vacuous. That is what went wrong three times.
     """
+    u = universe(2)
+    num = u.id_of(NumberPType())
+    numbers = u.id_of(ArrayPType(NumberPType()))
+    strings = u.id_of(ArrayPType(StringPType()))
+    assert not u.reaches(num, numbers), "number should not reach number[]"
+    assert u.reaches(num, strings), 'number -> string[] via (5 + "").split(",")'
+
+
+def test_reachability_filters_a_real_share():
+    """Reachability must exclude a substantial fraction, or it is doing no work."""
     u = universe(2)
     pairs = sum(bin(r).count("1") for r in u.reach)
     density = 100.0 * pairs / (len(u) ** 2)
-    print(f"      {density:.0f}% dense -- reachability excludes nothing")
-    assert density == 100.0, f"{density:.1f}% -- see FRAGMENT.md, this was 100%"
+    print(f"      {density:.0f}% of pairs reachable "
+          f"(PLDI's own environment: 45%)")
+    assert 40.0 < density < 75.0, (
+        f"{density:.0f}% -- near 100 means calls are ungated, near 0 means the "
+        "member tables are not being read"
+    )
 
 
-def test_restricted_graph_does_filter():
-    """Without higher-order methods the table does filter, at 76%.
-
-    Kept to show the contrast: the restriction is what creates filtering, and PLDI's
-    own 45% comes from being restricted in a similar way.
-    """
-    u = TypeUniverse.for_fragment(max_depth=2, higher_order=False)
+def test_ungated_calls_destroy_the_filter():
+    """Pins the failure mode, so a regression is a test failure and not a surprise."""
+    u = TypeUniverse.for_fragment(max_depth=2, gated=False)
     pairs = sum(bin(r).count("1") for r in u.reach)
     density = 100.0 * pairs / (len(u) ** 2)
-    print(f"      {len(u)} types, {density:.0f}% dense")
-    assert len(u) == 125, len(u)
-    assert 70.0 < density < 80.0, density
+    print(f"      ungated: {len(u)} types, {density:.0f}% dense")
+    assert density > 70.0, "expected the ungated graph to be much denser"
 
 
 if __name__ == "__main__":

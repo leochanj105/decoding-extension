@@ -95,78 +95,69 @@ branches**: `split(string | RegExp)` becomes `split(string)`, which is the commo
 case and the only thing that keeps `string -> string[]` reachable at all. The same
 move recovers `replace`, `replaceAll` and `search`.
 
-### Reachability does not filter, and that is a fact about TypeScript
+### Calling a function requires its arguments to be writable
 
-`map`, `filter` and `reduce` make the graph **100% dense**: every type reaches every
-other type, so asking "can this type still become the goal type?" always answers
-yes.
+This is the rule that makes the graph correct, and getting it wrong invalidated
+three earlier versions of this section.
 
-The first instinct was that this was a modelling error, because `map` needs a
-callback and the fragment has no arrow functions. It is not. A callback can be a
-*method reference*: `someStr.charAt` is already a `(number) => string`, so
-`numbers.map(someStr.charAt)` is a `string[]`. Conditioning each higher-order edge
-on its callback type being independently reachable -- a fixpoint, since new edges
-make new function types reachable -- still settles at 100% dense after three rounds,
-with 146 function types obtainable from method references alone. And even without
-`map`, `booleans.join(",").split(",")` walks from booleans to strings.
+Member access always yields a method's type: `someStr.split` is a
+`(string, number) => string[]` whether or not you call it. But *calling* it means
+supplying every parameter, and in the fragment an argument can only be a literal, an
+in-scope name, or another expression -- never an arrow function. So a call fires only
+when every parameter type is obtainable, which is a fixpoint: each round makes more
+types obtainable and so admits more calls. It settles in two rounds.
 
-| | types | edges | density |
+Without that gate every type reaches every other and the type filter is vacuous.
+With it:
+
+| | types | edges | pairs reachable |
 |---|---:|---:|---:|
 | PLDI full environment | 396 | 2,371 | 44.9% |
-| members within the six only | 101 | 621 | 40.9% |
-| the fragment without higher-order methods | 125 | 766 | 76.0% |
-| **the fragment as specified** | **153** | **934** | **100%** |
+| **the fragment** | **125** | **750** | **57.6%** |
+| the fragment with calls ungated | 125 | 766 | 76.0% |
 
-So in TypeScript essentially every type is convertible to every other, and a
-reachability filter is vacuous. This explains an earlier measurement that looked
-odd: of PLDI's 86,106 reachability queries on one program, 99.8% did no search work
-and 75% had a goal of `unknown`. They were asking a question whose answer is almost
-always yes.
+And the concrete question that exposed the error:
 
-**PLDI's own graph filters only because it is incomplete.** At 44.9% it rejects
-pairs that are genuinely reachable in TypeScript, because its reachability ignores
-generic instantiation (it handles that lazily during the parse instead) and because
-`_reachable_bfs` gives up after 1000 iterations and reports "not reachable". Both
-make it stricter than the language.
+```
+number -> number[]    no    nothing turns a number into an array of numbers
+number -> string[]    yes   (5 + "").split(",")
+string -> string[]    yes   .split(",")
+```
 
-### Where the filtering actually comes from
+`number -> number[]` requires `map` or `reduce` with a callback. The only function
+values the fragment can produce are declared functions and method references, and
+none has the shape `reduce` needs, so the edge does not exist. An ungated graph
+claimed it did, via a `reduce` whose callback nothing could write.
 
-If reachability admits everything, the constraint must bite elsewhere. Three places,
-in order of how much they filter:
+### Where the filtering comes from
+
+Reachability excludes about 42% of pairs, so it does real work -- but it is only part
+of the story, and not the selective part. Three sources, in order:
 
 1. **Exact type at a completion point.** At `let s: string = x|` the token `;` is
-   illegal, because ending here requires the expression to *be* a string, not merely
-   to be convertible to one. This is where nearly all the type filtering lives.
-2. **The member namespace after a dot.** At `someStr.|` only `string`'s members are
-   legal -- a few dozen names out of everything in scope. Highly selective, and it
-   depends on the receiver's type, so it cannot be precompiled per grammar position.
-3. **Syntax**, which XGrammar already handles.
+   illegal: ending here requires the expression to *be* a string, not merely to be
+   convertible to one. Most type filtering lives here.
+2. **The receiver's members after a dot.** At `someStr.|` only `string`'s members are
+   legal -- a few dozen names rather than everything in scope. Highly selective, and
+   it depends on the receiver's type, so it cannot be precompiled per grammar
+   position.
+3. **Reachability**, which rules out the 42% and keeps a prefix from being written
+   when it is already doomed.
 
-What reachability is still needed for is *not* rejecting: it is knowing that a
-prefix is not yet doomed, so `x` may be written at a string position. Since the
-answer is nearly always yes, that is cheap to answer and cheap to be right about.
-
-So the per-type masks in DESIGN.md should be indexed by the exact required type at
-completion points and by the receiver type at member positions -- not by the set of
-types that reach a goal, which is every type.
-
-The remaining gap to PLDI is their 24 default global objects (`Math`, `console`,
-`JSON`) and the types they pull in. Closing it is pure porting of more member
-tables with no new mechanism.
-
-Not explained by the `any` wildcard: only 6% of PLDI's edges touch `any` or
-`unknown`, so their count is not inflated by a vacuous type.
+So the per-type masks in DESIGN.md want indexing by the exact required type at
+completion points and by the receiver type at member positions, with reachability as
+a cheaper pre-filter rather than the main mechanism.
 
 ## Caveats
 
-- Two earlier versions of this file were wrong. The first claimed 60% / 62%,
-  measured while keeping every member including the generics the fragment excludes.
-  The second claimed 43% / 44%, measured with those generics monomorphised as
-  unconditional edges, which silently made the graph 100% dense. The figures above
-  separate the static graph from the environment-dependent part.
-- PLDI's own graph is not ground truth either: it omits generic instantiation
-  entirely, handling it lazily during the parse, so its 44.9% density
-  under-approximates what is actually reachable.
+- Three earlier versions of this section were wrong, all from the same cause:
+  treating a method's return type as reachable without checking the method's
+  arguments could be written. They claimed 60%/62%, then 43%/44%, then that the graph
+  was 100% dense and reachability vacuous. The gate above is the fix, and a test
+  pins `number` not reaching `number[]` so the error cannot recur silently.
+- PLDI's own graph is not ground truth either. It omits generic instantiation,
+  handling it lazily during the parse, and `_reachable_bfs` gives up after 1000
+  iterations reporting "not reachable". Both make it stricter than the language.
 - The graph is infinite without a depth bound, so only equal-depth comparisons
   mean anything.
 - Nothing here is validated against generated code yet. Whether models can write

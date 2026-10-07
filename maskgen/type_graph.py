@@ -143,6 +143,62 @@ def members_narrowed(typ) -> set:
     return out
 
 
+def argument_satisfied(param, obtainable) -> bool:
+    """Is there an obtainable type that may be passed for this parameter?"""
+    for candidate in obtainable:
+        try:
+            if param >= candidate:        # PLDI's assignability
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def close_with_argument_gate(max_depth: int, max_rounds: int = 8):
+    """The fragment's real closure: a call fires only if its arguments can be written.
+
+    This is the correction that matters. Member access always yields the member's
+    type, but *calling* it requires every parameter to be supplied, and in the
+    fragment an argument can only be a literal, an in-scope name, or another
+    expression -- never an arrow function. So `string[].reduce` cannot fire unless a
+    `(number[], string, number, string[]) => number[]` value is obtainable, and
+    nothing in the fragment produces one.
+
+    Without this gate the graph comes out 100% dense and the type filter looks
+    vacuous. With it, `number` does not reach `number[]`, which is correct: no
+    expression turns a number into an array of numbers. `number` does reach
+    `string[]`, via `(5 + "").split(",")`.
+
+    A fixpoint, since each round makes more types obtainable and so admits more
+    calls. Returns (types, edges, rounds).
+    """
+    obtainable = set(six_types())          # every one of the six has a literal
+    types: set = set()
+    edges: set = set()
+    rounds = 0
+    for rounds in range(1, max_rounds + 1):
+        have = frozenset(obtainable)
+
+        def call_gated(typ, have=have):
+            if not isinstance(typ, FunctionPType):
+                return set()
+            for param in getattr(typ, "call_signature", ()) or ():
+                if not argument_satisfied(param, have):
+                    return set()
+            return {typ.return_type}
+
+        table = dict(OPERATOR_REACHABLE_TYPE_MAP)
+        table["p.x"] = members_narrowed
+        table["p()"] = call_gated
+        types, raw, _capped = _close_with_table(table, six_types(), max_depth)
+        edges = {(a, o, b) for a, o, b in raw}
+        grown = obtainable | types
+        if grown == obtainable:
+            break
+        obtainable = grown
+    return types, edges, rounds
+
+
 def higher_order_given(typ, obtainable) -> set:
     """Higher-order array methods whose callback type is actually obtainable.
 

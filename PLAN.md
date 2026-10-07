@@ -29,9 +29,10 @@ The type universe is **finite and known before generation starts**: every type i
 built from the six base types, `declare function` signatures are unary, and the
 member tables are fixed. Nothing about it depends on what a program declares.
 
-It is also **100% dense** -- every type reaches every other -- because TypeScript
-converts anything to anything. So this phase is nearly free and nearly useless as a
-filter, and P3 must take its selectivity from the exact required type at completion
+57.6% of pairs are reachable, against 44.9% for PLDI's own environment, so it
+excludes about 42%. The rule that makes that correct is that **calling a function
+requires its arguments to be writable**; ungated, every type reaches every other.
+P3 still takes most of its selectivity from the exact required type at completion
 points and from the receiver's members after a dot. See FRAGMENT.md.
 
 So reachability is not environment-dependent at all. Close the universe, compute
