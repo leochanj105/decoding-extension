@@ -120,13 +120,21 @@ their opening bytes.
 ## The A/B/C split GOALS.md asked for
 
 **A. Fully static** — compiled once from the language and tokenizer.
-Syntax masks per grammar position; the built-in type graph and its edges; the
-per-precedence-window operator tables; the per-type masks for built-in symbols.
+Syntax masks per grammar position; the per-precedence-window operator tables; the
+per-type masks for built-in symbols; and — for the fragment in FRAGMENT.md — the
+*entire* type reachability relation.
+
+That last one is stronger than it first appeared. The fragment's type universe is
+finite and known before generation starts: every type is built from six base types,
+function signatures are unary, and the member tables are fixed. So the closure is a
+7 KB bitset table computed once in 18 ms, for all programs, and every reachability
+question afterwards is a bit test. Reachability is not environment-dependent at
+all. (A later universe opened by object literals or generics would move it back
+into B, where insert-only incremental closure applies.)
 
 **B. Environment-dependent** — recomputed when a declaration lands.
 One per-type mask, for the one affected type. Nothing else: no closure update, no
-grammar recompilation. A new type means computing its out-edges from its own
-structure and splicing it in.
+grammar recompilation.
 
 **C. Per-token** — genuinely unavoidable.
 The context filter composed for the current position (a few one-word ops),

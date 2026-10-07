@@ -12,28 +12,55 @@ valid and well-typed under the fragment's rules.** One page stating that precise
 plus which direction we err in when we cannot decide.
 
 This has to come first because PLDI is currently both our answer key and our
-target, and those must be separated. PLDI's reachability is bounded by
+target, and those must be separated. Once our own specification exists, a
+disagreement with PLDI can be attributed rather than assumed to be our bug.
+
+There is one concrete disagreement to expect. PLDI's reachability is bounded by
 `while queue and i < 1000` in `_reachable_bfs` and by a nesting-depth filter
-carried along the search path, and on hitting the cap it returns "not reachable" --
-so it silently rejects legal programs on large searches. Matching it exactly would
-mean copying that. (`max_steps` is *not* a bound in practice:
-`MAX_EXPRESSION_COMPLEXITY = math.inf`, so the `=5` default never applies from the
-parser.)
+carried along the search path, and on hitting the cap it returns "not reachable",
+so it silently rejects legal programs on large searches. (`max_steps` is *not* the
+bound it looks like: `MAX_EXPRESSION_COMPLEXITY = math.inf`, so the `=5` default
+never applies from the parser.) Neither bound exists in our design -- see P1 --
+so our mask will sometimes be more permissive, correctly.
 
-Once our own specification exists, a disagreement with PLDI can be attributed
-rather than assumed to be our bug.
+## P1 — Type reachability, which turns out to be fully static
 
-## P1 — The type universe and its edges
+For this fragment the type universe is **finite and known before generation
+starts**: every type is built from the six base types, `declare function`
+signatures are unary (so at most 36 function types), and the member tables are
+fixed. Nothing about the universe depends on what a program declares.
 
-Done in part: `maskgen/type_graph.py` builds and counts the graph, and FRAGMENT.md
-records what the fragment keeps (60% of types, 62% of edges at depth 2).
+So reachability is not environment-dependent at all. Close the universe, compute
+the transitive closure once, and every later question is a bit test. Measured on
+the fragment's graph:
 
-Remaining: port PLDI's member tables for the six types, and replace their
-path-carried depth budget with demand-driven interning -- add a type when the
-program actually mentions it. That is what makes the relation compositional and
-cacheable instead of dependent on the route the search took.
+| | depth <= 1 | depth <= 2 |
+|---|---:|---:|
+| types | 102 | 239 |
+| distinct edges | 585 | 1,405 |
+| build the graph | 2.5 ms | 4.7 ms |
+| fixpoint | 3.5 ms | 18.5 ms |
+| rounds to converge | 4 | 4 |
+| stored as bitsets | 1.3 KB | 7 KB |
 
-**Check:** the ported tables reproduce the measured edge counts.
+A 7 KB table, computed once in 18 ms of Python, for all programs. Four rounds to
+converge.
+
+This is why neither of PLDI's bounds is needed. They exist because PLDI's universe
+is *open* -- it constructs `ArrayPType(t)` mid-search -- so the depth filter and
+iteration cap are termination hacks, and it searches per query instead of computing
+the relation once. With a closed universe the whole problem disappears, and with it
+the path-dependence that made the relation non-compositional.
+
+Remaining work: port PLDI's member tables for the six types, and decide how far out
+to port them. The measurement charts that tradeoff -- members whose signatures
+mention types outside the six either pull those types in (toward 239) or are left as
+nodes with no outgoing edges (fewer edges). Demand-driven interning is *not* needed
+here; it becomes necessary only if the universe is later opened by object literals
+or generics.
+
+**Check:** the ported tables reproduce the measured edge counts, and the closure
+contains no pair PLDI calls unreachable except where P0 says we differ.
 
 ## P2 — The environment
 
@@ -96,8 +123,10 @@ Worth settling before building speculative overlap machinery.
 
 | theirs | ours | why |
 |---|---|---|
-| nesting-depth budget carried along the search path | bound the universe by interning what the program mentions | makes reachability compositional and cacheable |
-| hard 1000-iteration cap returning "not reachable" | principled, or none | theirs silently blocks legal programs |
+| open type universe, constructed during the search | closed universe, known before generation | removes the need for any bound at all |
+| nesting-depth budget carried along the search path | none | the budget existed only to tame the open universe; it also made the relation non-compositional |
+| hard 1000-iteration cap returning "not reachable" | none | theirs silently blocks legal programs |
+| reachability searched per query | one fixpoint, 7 KB, then bit tests | 4 rounds to converge; nothing to search |
 | frozen dataclasses, no state merging | XGrammar's mutable parser with rollback | removes 45-50% copying and the 70-82% duplicate readings |
 | lazy: test top-k candidates in probability order | one eager mask | the entire point |
 | three context stacks drained array, then paren, then pattern, regardless of real nesting | verify before copying | looks like a simplification that may be wrong on `[ (x) ]` versus `( [x] )` |
