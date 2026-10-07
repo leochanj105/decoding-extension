@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import itertools
 import os
 import sys
 
@@ -37,6 +38,7 @@ from typesafe_llm.parser.types_ts import (  # noqa: E402
     FunctionPType,
     NumberPType,
     StringPType,
+    UnionPType,
 )
 
 
@@ -93,6 +95,54 @@ def monomorphic_higher_order(typ) -> set:
     return out
 
 
+def narrow_to_six(typ) -> set:
+    """Every instantiation of `typ` that mentions only the six types.
+
+    Unions are narrowed to their in-six branches, so `split(string | RegExp)`
+    becomes `split(string)`. That is the same move as monomorphising a generic: the
+    real signature has a branch we can express, and keeping it preserves the edge
+    while dropping the member would lose `string -> string[]` entirely.
+
+    Returns an empty set when no branch survives.
+    """
+    if isinstance(typ, UnionPType):
+        out = set()
+        for branch in typ.types:
+            out |= narrow_to_six(branch)
+        return out
+    if isinstance(typ, ArrayPType):
+        return {ArrayPType(e) for e in narrow_to_six(typ.element_type)}
+    if isinstance(typ, FunctionPType):
+        params = []
+        for param in getattr(typ, "call_signature", ()) or ():
+            options = narrow_to_six(param)
+            if not options:
+                return set()
+            params.append(sorted(options, key=str))
+        returns = narrow_to_six(typ.return_type)
+        if not returns:
+            return set()
+        out = set()
+        for combo in itertools.product(*params) if params else [()]:
+            for ret in returns:
+                out.add(_fn(list(combo), ret))
+        return out
+    return {typ} if str(typ) in _SIX_NAMES else set()
+
+
+def members_narrowed(typ) -> set:
+    """Member types with unions narrowed to their in-six branches."""
+    try:
+        attributes = typ.attributes
+    except Exception:
+        return set()
+    out = set()
+    for entry in attributes.values():
+        member = entry[0] if isinstance(entry, tuple) else entry
+        out |= narrow_to_six(member)
+    return out
+
+
 def members_within_six(typ) -> set:
     """Member types, dropping any member whose signature leaves the six types.
 
@@ -116,7 +166,16 @@ def edge_table(mode: str) -> dict:
 
     full        PLDI's member tables as they are
     within-six  only members whose signatures stay inside the six types
-    fragment    those, plus monomorphic instantiations of the generic methods
+    fragment    those, with unions narrowed to their in-six branches
+    fragment+ho plus monomorphic instantiations of the generic array methods
+
+    The higher-order methods are a separate mode because their edges are not
+    static. `number[].map` reaches `string[]` only by supplying a `(number) =>
+    string` callback, and the fragment has no arrow functions -- the only way to
+    produce a function value is to name a `declare function`. So those edges exist
+    only when a suitable function has been declared, which makes them
+    environment-dependent. Adding them unconditionally makes the graph 100% dense
+    and the type filter useless.
     """
     table = dict(OPERATOR_REACHABLE_TYPE_MAP)
     if mode == "full":
@@ -124,7 +183,9 @@ def edge_table(mode: str) -> dict:
     if mode == "within-six":
         table["p.x"] = members_within_six
     elif mode == "fragment":
-        table["p.x"] = lambda t: members_within_six(t) | monomorphic_higher_order(t)
+        table["p.x"] = members_narrowed
+    elif mode == "fragment+ho":
+        table["p.x"] = lambda t: members_narrowed(t) | monomorphic_higher_order(t)
     else:
         raise ValueError(mode)
     return table
@@ -194,7 +255,10 @@ def subset_seeds():
 def report(name: str, seeds, max_depth: int, mode: str = "full") -> dict:
     types, edges, capped = close_over(seeds, max_depth, mode=mode)
     by_operator = collections.Counter(op for _, op, _ in edges)
-    distinct = {(str(a), op, str(b)) for a, op, b in edges}
+    # Deduplicate on the types themselves. Counting by str() overcounts: a type and
+    # its optional-parameter spelling compare equal but stringify differently, e.g.
+    # (v0: number) => number versus (v0: number?) => number.
+    distinct = {(a, op, b) for a, op, b in edges}
     print(f"\n{name}, nesting depth <= {max_depth}")
     print(f"  types                 {len(types)}")
     print(f"  edges (distinct)      {len(distinct)}")
@@ -218,12 +282,15 @@ def main() -> None:
         full = report("PLDI built-in environment", builtins_, depth, "full")
         strict = report("six types, members within the six only",
                         subset_seeds(), depth, "within-six")
-        frag = report("six types + monomorphic generic methods (THE FRAGMENT)",
+        frag = report("THE FRAGMENT: unions narrowed to in-six branches",
                       subset_seeds(), depth, "fragment")
+        ho = report("fragment + monomorphic higher-order methods (not static)",
+                    subset_seeds(), depth, "fragment+ho")
         if not full["types"]:
             continue
         print(f"\n  share of PLDI's graph at depth <= {depth}")
-        for label, got in (("within-six only", strict), ("the fragment", frag)):
+        for label, got in (("within-six only", strict), ("the fragment", frag),
+                           ("+ higher-order", ho)):
             print(f"      {label:18} types {got['types']/full['types']:.0%}, "
                   f"edges {got['edges']/max(1,full['edges']):.0%}")
 

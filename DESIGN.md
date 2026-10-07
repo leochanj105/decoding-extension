@@ -124,13 +124,16 @@ Syntax masks per grammar position; the per-precedence-window operator tables; th
 per-type masks for built-in symbols; and — for the fragment in FRAGMENT.md — the
 *entire* type reachability relation.
 
-That last one is stronger than it first appeared. The fragment's type universe is
-finite and known before generation starts: every type is built from six base types,
-function signatures are unary, and the member tables are fixed. So the closure is a
-7 KB bitset table computed once in 18 ms, for all programs, and every reachability
-question afterwards is a bit test. Reachability is not environment-dependent at
-all. (A later universe opened by object literals or generics would move it back
-into B, where insert-only incremental closure applies.)
+That last one holds only while higher-order methods are excluded. The fragment's
+type universe is then finite and known before generation starts -- 125 types, 766
+edges, a 4 KB bitset table closed in 4 rounds in 10 ms, for all programs -- and
+every reachability question is a bit test.
+
+It stops holding as soon as `map`, `filter` or `reduce` come back. Those reach a new
+type only by supplying a callback, and the fragment has no arrow functions, so the
+edge exists only once a `declare function` of the right type is in scope. Adding
+them unconditionally makes the graph 100% dense and the filter useless; adding them
+properly moves reachability into B, where insert-only incremental closure applies.
 
 **B. Environment-dependent** — recomputed when a declaration lands.
 One per-type mask, for the one affected type. Nothing else: no closure update, no

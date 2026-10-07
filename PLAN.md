@@ -25,10 +25,14 @@ so our mask will sometimes be more permissive, correctly.
 
 ## P1 — Type reachability, which turns out to be fully static
 
-For this fragment the type universe is **finite and known before generation
-starts**: every type is built from the six base types, `declare function`
-signatures are unary (so at most 36 function types), and the member tables are
-fixed. Nothing about the universe depends on what a program declares.
+While higher-order methods are excluded, the type universe is **finite and known
+before generation starts**: every type is built from the six base types, `declare
+function` signatures are unary, and the member tables are fixed. Nothing about it
+depends on what a program declares.
+
+That ends when `map`, `filter` and `reduce` are added back, since their edges need
+a callback the fragment cannot write except by naming a declared function. Adding
+them unconditionally makes the graph 100% dense and the filter useless.
 
 So reachability is not environment-dependent at all. Close the universe, compute
 the transitive closure once, and every later question is a bit test. Measured on

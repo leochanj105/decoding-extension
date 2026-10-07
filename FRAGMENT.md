@@ -78,48 +78,68 @@ None of these add type-transition edges. All of them add parsing.
 
 ## How much of the type graph this keeps
 
-`maskgen/type_graph.py --max-depth 2`, closing over PLDI's own edge functions:
+`maskgen/type_graph.py --max-depth 2`. Edges are counted by type equality, not by
+string: a type and its optional-parameter spelling compare equal but stringify
+differently, so counting strings miscounts.
 
-| nesting depth | PLDI built-in environment | members within the six only | **the fragment** |
-|---|---|---|---|
-| <= 1 | 141 types, 810 edges | 54 / 339  (38% / 42%) | **77 / 477  (55% / 59%)** |
-| <= 2 | 396 types, 2,344 edges | 101 / 621  (26% / 26%) | **147 / 897  (37% / 38%)** |
+| | types | edges | density | share of PLDI |
+|---|---:|---:|---:|---|
+| PLDI full environment | 396 | 2,371 | 44.9% | — |
+| members within the six only | 101 | 621 | 40.9% | 26% / 26% |
+| **the fragment** | **125** | **766** | **76.0%** | **32% / 32%** |
+| the fragment + higher-order methods | 171 | 1,042 | 100% | 43% / 44% |
 
-The middle column is what happens if every member whose signature mentions a type
-outside the six is simply dropped. Counting the tables, 127 of 160 members (79%)
-already stay inside, so only 21% are affected -- but they carry more than half the
-graph, because the array methods they contain take callbacks.
+Counting the tables, 127 of 160 members (79%) already stay inside the six types.
+The fragment recovers some of the other 21% by **narrowing unions to their in-six
+branches**: `split(string | RegExp)` becomes `split(string)`, which is the common
+case and the only thing that keeps `string -> string[]` reachable at all. The same
+move recovers `replace`, `replaceAll` and `search`.
 
-The right column adds those methods back by **instantiating them at concrete
-types**: `number[].map` with a `(number) => string` callback yields `string[]`.
-Nine instantiations per array type replace one generic signature. This is the same
-trick that turns `push` into `(number) => number`, applied to `map`, `filter`,
-`reduce`, `some` and `every`, and it recovers the graph from 26% to 37%.
+### Higher-order methods are environment-dependent, not static
 
-So the fragment keeps roughly **37% of the types and 38% of the edges** of PLDI's
-full environment at nesting depth 2, in absolute terms 147 types and 897 edges.
-Edges by kind at depth 2 for the full environment: member access 1,167, `+` 398,
-`==` 396, calls 362, indexing 11, logical and ternary 18 each.
+`map`, `filter`, `reduce`, `some` and `every` are excluded from the static graph,
+and the last row shows why: adding them makes the graph **100% dense**, so every
+type reaches every goal and the type filter selects nothing.
 
-The remaining gap is PLDI's 24 default global objects (`Math`, `console`, `JSON`
-and so on) and the types they drag in. Closing it is pure porting of more member
-tables and needs no new mechanism, so it is a lever to pull if 37% proves too thin
-rather than a design problem.
+That is not a measurement artefact, it is the fragment's own rule. `number[].map`
+reaches `string[]` only by supplying a `(number) => string` callback, and the
+fragment has no arrow functions -- the only way to obtain a function value is to
+name a `declare function`. So the edge exists only once such a function has been
+declared. It belongs to the environment, not to the static universe.
 
-Two things this is *not* explained by:
+They are kept in a separate mode (`fragment+ho`) to be added back deliberately,
+at which point type reachability stops being static and has to be maintained
+incrementally.
 
-- **Not the `any` wildcard.** Only 6% of PLDI's edges at depth 2 touch `any` or
-  `unknown`; 2,207 of 2,344 run between concrete types. An earlier guess that their
-  count was inflated by a vacuous wildcard was wrong.
-- **Not nesting depth.** The three columns are compared at equal depth throughout.
+### What the density means
+
+At 76% the static filter rejects only about a quarter of (source, goal) pairs, so
+it is weak at the *start* of an expression. That is correct and matches PLDI: at
+`let s: string = |` it allows `x` even when `x` is a number, because `x.toString()`
+is a string. The constraint bites when the expression must **end** -- `x;` is
+rejected -- and a completion position demands an exact type, not reachability.
+
+So the value of the design is not a strong reachability filter. It is doing the
+whole job, syntax and types, at both expression start and completion, as a mask
+lookup rather than a per-candidate parse.
+
+The remaining gap to PLDI is their 24 default global objects (`Math`, `console`,
+`JSON`) and the types they pull in. Closing it is pure porting of more member
+tables with no new mechanism.
+
+Not explained by the `any` wildcard: only 6% of PLDI's edges touch `any` or
+`unknown`, so their count is not inflated by a vacuous type.
 
 ## Caveats
 
-- The counts close over PLDI's member tables from our six seed types, so they
-  describe the fragment *as specified*. An earlier version of this file claimed
-  60% / 62%; that measurement kept every member, including the generic `map`,
-  `filter` and `reduce` that the fragment excludes, so it was not self-consistent.
-  The figures above are.
+- Two earlier versions of this file were wrong. The first claimed 60% / 62%,
+  measured while keeping every member including the generics the fragment excludes.
+  The second claimed 43% / 44%, measured with those generics monomorphised as
+  unconditional edges, which silently made the graph 100% dense. The figures above
+  separate the static graph from the environment-dependent part.
+- PLDI's own graph is not ground truth either: it omits generic instantiation
+  entirely, handling it lazily during the parse, so its 44.9% density
+  under-approximates what is actually reachable.
 - The graph is infinite without a depth bound, so only equal-depth comparisons
   mean anything.
 - Nothing here is validated against generated code yet. Whether models can write
