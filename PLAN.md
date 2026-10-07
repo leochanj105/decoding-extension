@@ -1,0 +1,111 @@
+# Plan
+
+Where this is going, in order, with a check at each step that can fail.
+
+Settled already: the design is in DESIGN.md, the fragment in FRAGMENT.md, and
+`xgrammar/` is on branch `typed-lexicon` with no code on it yet.
+
+## P0 — Write down what "legal" means, independent of PLDI
+
+**A token is legal at a prefix if some completion exists that is syntactically
+valid and well-typed under the fragment's rules.** One page stating that precisely,
+plus which direction we err in when we cannot decide.
+
+This has to come first because PLDI is currently both our answer key and our
+target, and those must be separated. PLDI's reachability is bounded by
+`while queue and i < 1000` in `_reachable_bfs` and by a nesting-depth filter
+carried along the search path, and on hitting the cap it returns "not reachable" --
+so it silently rejects legal programs on large searches. Matching it exactly would
+mean copying that. (`max_steps` is *not* a bound in practice:
+`MAX_EXPRESSION_COMPLEXITY = math.inf`, so the `=5` default never applies from the
+parser.)
+
+Once our own specification exists, a disagreement with PLDI can be attributed
+rather than assumed to be our bug.
+
+## P1 — The type universe and its edges
+
+Done in part: `maskgen/type_graph.py` builds and counts the graph, and FRAGMENT.md
+records what the fragment keeps (60% of types, 62% of edges at depth 2).
+
+Remaining: port PLDI's member tables for the six types, and replace their
+path-carried depth budget with demand-driven interning -- add a type when the
+program actually mentions it. That is what makes the relation compositional and
+cacheable instead of dependent on the route the search took.
+
+**Check:** the ported tables reproduce the measured edge counts.
+
+## P2 — The environment
+
+The symbol table: names in scope with their types, an index from type to names, and
+undo. Undo is needed because the parser rewinds, though rarely: median uncertain
+tokens per position is 0 and 63-81% of positions have none, so the rule is to
+consult during speculation and mutate only on a committed token.
+
+**Check:** replaying a program, the symbol table matches what PLDI's parser holds
+at the same point (`live_symbols` in `profiling/profile_reachability.py` reads it).
+
+## P3 — The mask
+
+Per-type token lists, and the merge. Measured sizes say these are small: median 4
+tokens per type, 92 for the union, never near XGrammar's 1000-token dense
+threshold.
+
+The context filter starts as a call to PLDI's own `any_reachable`, once per live
+type rather than once per candidate token -- about 40 calls instead of 700. That
+isolates the mask construction from the reachability, so a wrong answer can only be
+one of the two.
+
+**Check:** `maskgen/replay_corpus.py` already establishes ground truth token by
+token over the corpus (`c` 99.3% accepted, `nc` 37.3% rejected). Our mask must
+admit every token of a `c` program and block somewhere in the `nc` programs that
+PLDI refuses.
+
+## P4 — Our own reachability
+
+Replace `any_reachable`.
+
+**Check:** identical answers on the 120,935 queries already recorded in
+`profiling/reach_heavy_queries.csv`, except where our specification deliberately
+differs -- each such case named.
+
+## P5 — XGrammar integration
+
+On `typed-lexicon`: the `requirement_id` field in the parser state, a grammar
+element for a runtime-supplied lexicon, and the branch in `FillBitmaskForStates`
+that consults our index for it. New code in new files; edits to existing files held
+to one field and one branch, since upstream is active.
+
+**Check:** the end-to-end mask equals the Python reference from P3.
+
+## P6 — Measurement
+
+Overhead against **syntax-only XGrammar on identical traces**, not against PLDI.
+Comparing to PLDI confounds the algorithm with Python-versus-C++ and with their
+representation choices, which GOALS.md explicitly forbids claiming credit for.
+Same tokenizer, same implementation, one variable: the type reasoning.
+
+Report the worst step as well as the mean, since one slow step stalls a pipeline.
+
+A note on the premise: if mask construction lands in microseconds, as the measured
+sizes suggest, there is no latency left to hide behind a forward pass. The
+constraint stops being a latency problem rather than becoming an overlapped one.
+Worth settling before building speculative overlap machinery.
+
+## Deliberate departures from PLDI
+
+| theirs | ours | why |
+|---|---|---|
+| nesting-depth budget carried along the search path | bound the universe by interning what the program mentions | makes reachability compositional and cacheable |
+| hard 1000-iteration cap returning "not reachable" | principled, or none | theirs silently blocks legal programs |
+| frozen dataclasses, no state merging | XGrammar's mutable parser with rollback | removes 45-50% copying and the 70-82% duplicate readings |
+| lazy: test top-k candidates in probability order | one eager mask | the entire point |
+| three context stacks drained array, then paren, then pattern, regardless of real nesting | verify before copying | looks like a simplification that may be wrong on `[ (x) ]` versus `( [x] )` |
+
+## Not yet decided
+
+- Whether the fragment's own `+` and `==` need PLDI's full precedence machinery or
+  a two-level window.
+- How the goal type is computed for each requirement-setting rule, concretely.
+- Whether to add one or two of PLDI's global objects to close the 40% graph gap.
+- Testing strategy beyond the corpus walk, deferred on purpose.
