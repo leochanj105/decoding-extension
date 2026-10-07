@@ -119,20 +119,55 @@ def test_errors():
         raise AssertionError(f"{why}: {text!r} should not parse, got {got}")
 
 
-def test_the_parser_reports_pending_lexemes_rather_than_judging_them():
-    """A deliberate split of responsibility, worth stating so it is not a hidden hole.
+def test_an_unfinishable_partial_word_is_rejected():
+    """`let x : num` can still become `number`; `let x : widget` can become nothing."""
+    analyse("let x : num")                       # fine
+    analyse("let x : number")                    # fine
+    for bad in ("let x : widget", "let x : q", "declare fx"):
+        try:
+            analyse(bad)
+        except ParseError:
+            continue
+        raise AssertionError(f"{bad!r} has no legal continuation and should be refused")
 
-    `let x : widget` is not a valid prefix -- no type in the fragment starts with
-    "widget" -- but analyse() accepts it, because `widget` is the pending lexeme and
-    pending lexemes are never consumed. Deciding whether a partial word can still
-    grow into something legal is the mask's job: it already has to compute the legal
-    continuations, and it reports the prefix dead by returning an empty mask.
 
-    If this ever needs to move into the parser, this test is the place it breaks.
+def test_a_partial_name_must_match_something_in_scope():
+    """At a statement start a name must already exist, so the prefix must match one."""
+    analyse("let count : number = 1; cou")       # could still become `count`
+    analyse("let count : number = 1; l")         # could still become `let`
+    analyse("let count : number = 1; de")        # could still become `declare`
+    try:
+        analyse("let count : number = 1; q")
+    except ParseError:
+        return
+    raise AssertionError("no name or keyword starts with q, so it should be refused")
+
+
+def test_expected_set_is_available_for_the_mask():
+    """The mask is built from this, so it has to be exposed and correct."""
+    assert analyse("let x : ").expected().words == frozenset(
+        {"number", "string", "boolean"}
+    )
+    assert analyse("let ").expected().fresh_name is True
+    at_stmt = analyse("let x : number = 1; ").expected()
+    assert at_stmt.words == frozenset({"let", "declare"})
+    assert at_stmt.names == frozenset({"x"})
+    # note the trailing space: without it `number` is still the pending lexeme and
+    # has not been consumed, so we are still expecting the type word
+    assert analyse("let x : number ").expected().punctuation == frozenset({"[", "="})
+    assert analyse("let x : number").want == WANT_TYPE
+
+
+def test_inside_an_expression_nothing_is_checked_yet():
+    """Honest gap: the expression body is opaque, so anything is admitted there.
+
+    `let x : number = zzz` is accepted although zzz is not in scope. Closing this is
+    the next stage -- expression parsing with the committed type tracked -- not a
+    design boundary.
     """
-    p = analyse("let x : widget")
-    assert p.want == WANT_TYPE
-    assert p.pending is not None and p.pending.text == "widget"
+    position = analyse("let x : number = zzz")
+    assert position.want == WANT_EXPRESSION
+    assert position.expected().anything is True
 
 
 def test_valid_prefixes_do_not_raise():

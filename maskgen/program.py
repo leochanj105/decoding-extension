@@ -37,7 +37,9 @@ from typesafe_llm.parser.types_ts import (  # noqa: E402
 )
 
 from maskgen.lexer import (  # noqa: E402
+    KIND_NUMBER,
     KIND_PUNCT,
+    KIND_STRING,
     KIND_WORD,
     LexError,
     Lexeme,
@@ -74,6 +76,44 @@ WANT_RETURN_COLON = "return-colon"
 
 
 @dataclass(frozen=True)
+class Expected:
+    """What may legally come next, as lexeme shapes.
+
+    The mask is built from this, and `analyse` uses it to reject a pending lexeme
+    that cannot grow into anything legal -- which is how `let x : widget` is refused
+    while `let x : num` is kept.
+    """
+
+    words: frozenset = frozenset()          # exact words, e.g. {"number", "string"}
+    names: frozenset = frozenset()          # existing names legal here
+    punctuation: frozenset = frozenset()
+    fresh_name: bool = False                # a new name is being declared: any word
+    number_literal: bool = False
+    string_literal: bool = False
+    anything: bool = False                  # inside an opaque expression, for now
+
+    def admits_pending(self, pending: Lexeme) -> bool:
+        """Could `pending` still grow into something legal here?"""
+        if self.anything:
+            return True
+        if pending.kind == KIND_WORD:
+            if self.fresh_name:
+                # a name being declared: any word extends to a non-reserved name
+                return True
+            return any(
+                candidate.startswith(pending.text)
+                for candidate in (self.words | self.names)
+            )
+        if pending.kind == KIND_NUMBER:
+            return self.number_literal
+        if pending.kind == KIND_STRING:
+            return self.string_literal
+        if pending.kind == KIND_PUNCT:
+            return any(p.startswith(pending.text) for p in self.punctuation)
+        return False
+
+
+@dataclass(frozen=True)
 class Position:
     """Everything the mask needs about where we are."""
 
@@ -83,9 +123,14 @@ class Position:
     pending: Lexeme | None = None                  # the unfinished trailing lexeme
     expression_depth: int = 0                      # bracket nesting inside an expression
     expression_started: bool = False               # any lexeme consumed in this expression
+    _kind: str | None = None                       # 'let' | 'assign' | 'declare'
+    _param_seen: bool = False                      # declare: the parameter type is done
 
     def names_of_type(self, typ) -> list[str]:
         return sorted(n for n, t in self.scope.items() if t == typ)
+
+    def expected(self) -> Expected:
+        return expected_at(self)
 
     def __repr__(self) -> str:
         bits = [f"want={self.want}"]
@@ -95,6 +140,63 @@ class Position:
             bits.append(f"pending={self.pending!r}")
         bits.append(f"scope={sorted(self.scope)}")
         return f"Position({', '.join(bits)})"
+
+
+TYPE_WORDS = frozenset(BASE_TYPES)
+
+
+def expected_at(position: "Position") -> Expected:
+    """The lexeme shapes that may legally follow this position.
+
+    Deliberately not yet complete for WANT_EXPRESSION: the expression body is still
+    opaque, so everything is admitted there. That is the next stage, not a boundary.
+    """
+    want = position.want
+    if want == WANT_STATEMENT:
+        # let, declare, or an assignment to a name already in scope
+        return Expected(
+            words=frozenset({"let", "declare"}),
+            names=frozenset(position.scope),
+        )
+    if want in (WANT_NEW_NAME, WANT_NEW_NAME_FUNCTION, WANT_PARAM_NAME):
+        return Expected(fresh_name=True)
+    if want in (WANT_COLON, WANT_RETURN_COLON):
+        return Expected(punctuation=frozenset({":"}))
+    if want == WANT_TYPE:
+        return Expected(words=TYPE_WORDS)
+    if want == WANT_ARRAY_CLOSE:
+        # the type may be followed by [ ] making it an array, or be finished
+        follow = {"["}
+        if position.pending is None:
+            follow |= _follow_after_type(position)
+        else:
+            follow |= _follow_after_type(position)
+        return Expected(punctuation=frozenset(follow))
+    if want == "array-close-bracket":
+        return Expected(punctuation=frozenset({"]"}))
+    if want == WANT_ASSIGN:
+        return Expected(punctuation=frozenset({"="}))
+    if want == WANT_FUNCTION:
+        return Expected(words=frozenset({"function"}))
+    if want == WANT_PARAM_OPEN:
+        return Expected(punctuation=frozenset({"("}))
+    if want == WANT_PARAM_CLOSE:
+        return Expected(punctuation=frozenset({")"}))
+    if want == WANT_SEMICOLON:
+        return Expected(punctuation=frozenset({";"}))
+    if want == WANT_EXPRESSION:
+        return Expected(anything=True)
+    return Expected()
+
+
+def _follow_after_type(position: "Position") -> set:
+    """What may follow a completed type annotation, which depends on the statement."""
+    kind = getattr(position, "_kind", None)
+    if kind == "let":
+        return {"="}
+    if kind == "declare":
+        return {")", ";"}
+    return {"=", ")", ";"}
 
 
 def _base(name: str):
@@ -147,14 +249,22 @@ def analyse(text: str) -> Position:
     s = _State()
     for lexeme in settled:
         _consume(s, lexeme)
-    return Position(
+    position = Position(
         want=s.want,
         scope=dict(s.scope),
         required_type=s.required_type,
         pending=pending,
         expression_depth=s.depth,
         expression_started=s.started,
+        _kind=s.kind,
+        _param_seen=s.param_type is not None,
     )
+    if pending is not None and not position.expected().admits_pending(pending):
+        raise ParseError(
+            f"{pending.text!r} cannot be continued into anything legal while "
+            f"expecting {s.want}"
+        )
+    return position
 
 
 def _consume(s: _State, lexeme: Lexeme) -> None:
