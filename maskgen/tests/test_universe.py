@@ -99,26 +99,49 @@ def test_a_number_does_not_become_an_array_of_numbers():
     assert u.reaches(num, strings), 'number -> string[] via (5 + "").split(",")'
 
 
-def test_every_type_is_constructible_from_literals():
-    """No typed position is ever a dead end, so "can this be finished?" is always yes.
+def test_every_annotatable_type_is_constructible():
+    """No position in the fragment is a dead end, because all six types have literals.
 
-    Every one of the six base types has a literal, and everything else in the universe
-    is reachable from one, so any required type can be produced from nothing. That
-    makes the "is there any completion here?" check vacuous and deletable.
-
-    What is *not* vacuous is the other check: once a partial expression has committed
-    to a type T, only 58% of goals remain reachable. At a number[] position the
-    literal 5 is already illegal, because number does not reach number[].
+    Stated this way on purpose. An earlier version asserted that all 125 types in the
+    universe are constructible, which is circular -- the universe is *defined* as what
+    is reachable from the six, so everything in it is reachable by construction. The
+    meaningful claim is about the types a program can actually name.
     """
     u = universe(2)
     from maskgen.type_graph import six_types
 
+    for typ in six_types():
+        assert u.id_of(typ) is not None, f"{typ} is not even in the universe"
+    # a goal in this fragment is always one of the six: annotations draw from them and
+    # so does `declare function f(a: T): U`, so no goal can be unconstructible
     constructible = 0
     for seed in six_types():
         constructible |= u.reach[u.id_of(seed)]
-    built = bin(constructible).count("1")
-    print(f"      {built}/{len(u)} types constructible from literals alone")
-    assert built == len(u), f"only {built} of {len(u)} types can be written"
+    for typ in six_types():
+        assert constructible >> u.id_of(typ) & 1, f"{typ} cannot be built"
+
+
+def test_most_function_types_cannot_be_built():
+    """And this is why the higher-order methods add no edges.
+
+    `map` needs a callback, i.e. a function-typed argument. Of the 36 one-argument
+    function types over the six, only 11 can be produced -- no built-in method has
+    the other shapes, and without declarations there is no other way to make a
+    function value. So map's edge does not exist, which is the same fact as
+    "arguments nobody can write" seen from the other side.
+    """
+    from maskgen.type_graph import six_types
+    from typesafe_llm.parser.types_ts import FunctionPType
+
+    u = universe(2)
+    buildable = sum(
+        1
+        for p in six_types()
+        for r in six_types()
+        if u.id_of(FunctionPType(call_signature=(p,), return_type=r)) is not None
+    )
+    print(f"      {buildable}/36 one-argument function types are constructible")
+    assert buildable == 11, buildable
 
 
 def test_committing_to_a_type_does_exclude_goals():

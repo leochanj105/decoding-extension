@@ -133,10 +133,19 @@ claimed it did, via a `reduce` whose callback nothing could write.
 
 A mask has to answer two questions at a typed position, and they are not the same.
 
-**"Can this position be finished at all?"** -- always yes. All 125 types in the
-universe are constructible from literals alone: each of the six base types has a
-literal, and everything else is reachable from one. So no typed position is ever a
-dead end, and this check is vacuous. It can be deleted rather than computed.
+**"Can this position be finished at all?"** -- always yes, but for a narrower reason
+than first recorded here. Every type a program can *name* is constructible: all six
+have literals. And a goal is always one of the six, since annotations draw from them
+and so does `declare function f(a: T): U`. So no typed position is a dead end and
+this check is vacuous.
+
+The earlier claim that "all 125 types in the universe are constructible" was
+circular: the universe is *defined* as what is reachable from the six, so everything
+in it is reachable by construction. The real figures are all six annotatable types,
+and **11 of the 36** one-argument function types over them. The other 25 -- including
+`(boolean) => string` and `(number[]) => number` -- cannot be built at all, which is
+precisely why the higher-order methods add no edges: `map` needs a callback, and most
+callback types are unconstructible.
 
 A corollary: there is no need for a symbol of each type to be in scope. Literals
 cover every type, so a position is satisfiable with an empty environment. Symbol
