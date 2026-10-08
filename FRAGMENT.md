@@ -67,16 +67,85 @@ Semicolons are required; there is no automatic semicolon insertion. Whitespace i
 | parentheses | keeps the precedence window real, so the context filter is non-trivial |
 | arrays | `.length`, `.join`, `.indexOf`, `.concat` -- many edges, and nesting depth > 0 |
 
-## Deliberately excluded
+## What is excluded from PLDI, and what each exclusion costs
 
-Generics, control flow, classes, interfaces, enums, modules and imports, arrow
-functions, function bodies, `return`, destructuring, spread, optional chaining,
-template literals, union types, `null` and `undefined`, optional members, type
-inference (every declaration is annotated), and comments.
+Everything PLDI supports that this fragment does not, with the measured effect and
+what adding it back would unblock. This is the roadmap for reinstating features one
+at a time.
 
-None of these add type-transition edges. All of them add parsing.
+### Types
+
+| excluded | why it matters | adding it back unblocks |
+|---|---|---|
+| **`any` / `unknown`** | PLDI's wildcard: reachable from and to everything. 75% of its reachability queries have `any` as the goal and are vacuously true | `.filter`, `.every`, `.find`, `.forEach` -- all four are dropped solely because their signatures mention `any` |
+| **type parameters (generics)** | `map`'s signature is `<T>(v0: string, ...) => T`; a `T` cannot be narrowed to one of the six | `.map`, and the whole generic-instantiation machinery PLDI handles with its `in_pattern` stack |
+| **`void`** | appears as `forEach`'s return | `.forEach` (together with `any`) |
+| **`RegExp`** | appears in `.match`, `.matchAll`, and in the unions of `.replace`, `.search`, `.split` | `.match`, `.matchAll`; the others are already kept by narrowing |
+| **union types** | kept only by *narrowing* to their in-six branch, so `split(string \| RegExp)` becomes `split(string)` | true unions, and the branches we currently discard |
+| **`null`, `undefined`, optional members** | optional chaining and the `T \| undefined` pattern PLDI pushes onto `in_pattern` | optional chaining |
+| **objects, tuples, index signatures, BigInt, classes** | PLDI's full type lattice | user-defined types, and the other 68% of its type graph |
+
+Only six types remain: `number`, `string`, `boolean` and arrays of them.
+
+### Operators
+
+PLDI has about thirty. The fragment keeps four: `.` `()` `+` `==`.
+
+Excluded: indexing `[]`, arithmetic `-` `*` `/` `%` `**`, comparisons `<` `<=` `>`
+`>=`, the other equalities `!=` `===` `!==`, bitwise `&` `^` `|` `<<` `>>` `>>>`,
+logical `&&` `||`, ternary `?`, and `++`.
+
+Measured consequence: **none, for reachability.** Tightening the precedence window
+from "anything allowed" to "stronger than `+`" removes edges (715 to 480) without
+changing what is reachable at all, because `.` and `()` sit at the top of the
+precedence table, survive every window, and generate the graph by themselves. The
+one exception is the receiver position of `.` or `(`, where no operator is allowed
+and reachability collapses to the six base types.
+
+That collapse is a property of having four operators. With PLDI's thirty it will not
+hold -- their own trace shows precedence roughly tripling the number of distinct
+reachability questions -- so this needs re-measuring as operators come back.
+
+### Language features
+
+| excluded | consequence |
+|---|---|
+| **lambdas / arrow functions** | function values can only come from a `declare function` or a method reference. In the empty environment only **11 of 36** one-argument function types over the six are constructible; with lambdas all 36 would be |
+| **multi-argument declarations** | `declare function f(a: T): U` is unary, so a multi-argument callback cannot be declared. PLDI does accept a one-argument function where a three-argument callback is wanted, so this is less limiting than it looks |
+| **function bodies, `return`** | no nested scopes and no closures, which is why the symbol table needs no block structure |
+| control flow, classes, interfaces, enums, modules | no type-transition edges, only parsing |
+| destructuring, spread, optional chaining, template literals | same |
+| type inference | every declaration is annotated, so a required type is always known syntactically |
+| comments, automatic semicolon insertion | parsing only; semicolons are required |
+
+### Members
+
+Of the 160 members on the six types, **127 (79%) stay inside the six**. Of the rest:
+
+- dropped entirely: `.map` (mentions `T`), `.filter`, `.every`, `.find`,
+  `.forEach` (mention `any`), `.match`, `.matchAll` (mention `RegExp`)
+- kept by narrowing a union: `.split`, `.replace`, `.replaceAll`, `.search`
+- kept as they are: `.reduce`, `.some`, `.sort`, `.join`, `.push`, and the rest
+
+PLDI's 24 default global objects -- `Math`, `console`, `JSON` and so on -- are
+excluded entirely. They and the types they pull in are most of the remaining gap.
+
+### The net effect
+
+| | PLDI | this fragment | kept |
+|---|---:|---:|---:|
+| types | 396 | 125 | 32% |
+| edges | 2,371 | 750 | 32% |
+| pairs reachable | 44.9% | 57.6% | -- |
+
+Density is *higher* than PLDI's, which is not an error on either side: our graph
+models generic instantiation nowhere, and PLDI's does not model it in reachability
+either, but PLDI additionally gives up after 1000 search steps and reports "not
+reachable". Both are approximations of different shapes.
 
 ## How much of the type graph this keeps
+
+
 
 `maskgen/type_graph.py --max-depth 2`. Edges are counted by type equality, not by
 string: a type and its optional-parameter spelling compare equal but stringify
@@ -124,10 +193,15 @@ number -> string[]    yes   (5 + "").split(",")
 string -> string[]    yes   .split(",")
 ```
 
-`number -> number[]` requires `map` or `reduce` with a callback. The only function
-values the fragment can produce are declared functions and method references, and
-none has the shape `reduce` needs, so the edge does not exist. An ungated graph
-claimed it did, via a `reduce` whose callback nothing could write.
+`number -> number[]` would need `map` or `reduce`. `.map` is gone for a different
+reason -- its signature mentions a type parameter -- and `.reduce` survives but needs
+a four-argument callback that nothing in the fragment produces, so the edge does not
+exist. An ungated graph claimed it did.
+
+Worth separating, because three different exclusions were at work and an earlier
+version of this file credited all of it to the argument gate: `.map` is blocked by
+generics, `.filter`/`.every`/`.find`/`.forEach` by `any`, and `.reduce` by the
+argument gate. See the exclusions table above.
 
 ### Two checks, with opposite answers
 
