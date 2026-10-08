@@ -51,5 +51,5 @@ for src in "$HERE"/test_*.cc; do
     -I"$XG/3rdparty/dlpack/include" -I"$XG/3rdparty/picojson" \
     "$src" -o "$exe" -L"$BUILD" -lxgrammar -lpthread 2>&1 | grep -v lto-wrapper || true
   echo "--- $(basename "$exe") ---"
-  "$exe" "$VOCAB"
+  "$exe" "$VOCAB"   # tests that need no vocabulary simply ignore it
 done
