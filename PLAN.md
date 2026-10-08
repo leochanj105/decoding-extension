@@ -136,6 +136,76 @@ Worth settling before building speculative overlap machinery.
 | lazy: test top-k candidates in probability order | one eager mask | the entire point |
 | three context stacks drained array, then paren, then pattern, regardless of real nesting | verify before copying | looks like a simplification that may be wrong on `[ (x) ]` versus `( [x] )` |
 
+## Deferred on purpose, with the trigger that revives each
+
+Each of these is skipped now for a stated reason, with the condition that makes it
+necessary. None is "we forgot".
+
+### The precedence stack in reachability — revive when operators come back
+
+PLDI threads a precedence window and an `in_nested_expression` stack through
+reachability, so that having written `1 + "x"` you can no longer apply `.length` to
+the whole thing without parentheses.
+
+Precedence does two jobs and only one of them is skipped:
+
+- **Which operator tokens are legal next** is pure syntax and we *do* need it. A
+  precedence-layered grammar gives it: `add ::= primary ("+" primary)*` and so on.
+  XGrammar parses that unaided.
+- **Which types are still reachable** is what we skip, because it is measurably
+  inert at this size:
+
+| window | types | edges | pairs reachable | components |
+|---|---:|---:|---:|---:|
+| anything allowed | 124 | 715 | 57.3% | 20 |
+| stronger than `==` | 124 | 597 | 57.3% | 20 |
+| stronger than `+` | 124 | 480 | 57.3% | 20 |
+
+Edges drop, reachability does not move. `.` and `()` sit at the top of the
+precedence table, survive every window, and generate the whole graph alone, so
+losing `+`'s edges disconnects nothing.
+
+**Trigger:** reinstating operators. PLDI has about thirty and its own trace shows
+precedence roughly tripling the number of distinct reachability questions, so the
+collapse above is a property of having four. Re-measure on the first operator
+added, not after several.
+
+One exception already applies: at the receiver of `.` or `(` no operator is legal
+(`a + b.c` parses as `a + (b.c)`), so reachability there collapses to the six base
+types. That is one case in the grammar, not a stack.
+
+### Member-field name sets — compile these, they are not done
+
+At `x.|` the legal members are those of `x`'s type whose own type reaches the
+required type. **Both halves are static**, so the whole set is precomputable, and
+it is small:
+
+| | |
+|---|---:|
+| members across the six receiver types | 127 |
+| (receiver, required) pairs over the six | 36 |
+| **distinct name sets among them** | **7** |
+| set size: min / median / max | 0 / 10 / 35 |
+| pairs admitting no member at all | **10 of 36** |
+
+Seven token lists, built once. And this is where the real filtering is: ten of the
+thirty-six pairs rule out member access entirely -- a `number` receiver can reach no
+`number[]`, so `5.|` is a dead end there -- while the rest cut to a median of ten
+names out of everything in scope.
+
+**Not deferred for a reason, just not built yet.** It belongs with the literal
+groups in P3.
+
+### Straddling tokens — needed before any real trace
+
+A token covering a name and the character beside it (` count`, `count;`) is not
+offered, because deciding it means walking the bytes while consulting the lexicon:
+a second hook, inside the parser's advance rather than the mask fill.
+
+**Trigger: immediately.** 83% of identifiers in real code arrive inside a token that
+also carries the preceding delimiter, so until this closes the implementation only
+works on artificially spaced input.
+
 ## Not yet decided
 
 - Whether the fragment's own `+` and `==` need PLDI's full precedence machinery or
