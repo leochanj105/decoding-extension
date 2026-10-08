@@ -50,11 +50,17 @@ struct Bitmask {
 
 // n= takes a number name, s= takes a string name. Both lexicon rules match any
 // identifier, so only the lexicon distinguishes them.
-// n= requires a number, a= requires a number[]
+// n= requires a number, a= requires a number[].
+//
+// Note there is ONE lexicon rule, not one per type. __req_<n> says "everything
+// inside me must produce type n"; the parser carries that requirement down and the
+// lexicon reads it from the state. That is what keeps the grammar from needing a
+// rule per type.
 static const char* kGrammar =
-    "root ::= (\"n=\" __lex_0 \";\") | (\"a=\" __lex_1 \";\")\n"
-    "__lex_0 ::= [a-zA-Z_] [a-zA-Z0-9_]*\n"
-    "__lex_1 ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
+    "root ::= (\"n=\" __req_0 \";\") | (\"a=\" __req_1 \";\")\n"
+    "__req_0 ::= __lex_name\n"
+    "__req_1 ::= __lex_name\n"
+    "__lex_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
 
 static const int TAG_NUMBER = 0, TAG_NUMBER_ARRAY = 1;
 
@@ -107,6 +113,20 @@ int main(int argc, char** argv) {
   // the known gap: a token spanning the end of a name is not offered
   check(at_number.count("count;") == 0,
         "straddling token 'count;' is NOT offered (known gap, needs the Advance hook)");
+
+  // an identifier position with no requirement must offer nothing, not everything
+  {
+    auto unreq = compiler.CompileGrammar(
+        "root ::= \"x=\" __lex_name \";\"\n"
+        "__lex_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n", "root");
+    GrammarMatcher m(unreq);
+    m.SetLexiconNames(TAG_NUMBER, {"count"});
+    m.AcceptString("x=");
+    Bitmask bm(V);
+    m.FillNextTokenBitmask(&bm.t, 0);
+    check(bm.count(V) == 0,
+          "a lexicon position with no requirement offers nothing, not everything");
+  }
 
   // a grammar with no lexicon rule must behave exactly as before
   auto plain = compiler.CompileGrammar("root ::= \"ab\" | \"ac\"\n", "root");
