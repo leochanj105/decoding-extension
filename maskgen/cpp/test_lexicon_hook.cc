@@ -1,8 +1,14 @@
-// Does xgrammar's mask actually come from the runtime lexicon at a __lex_ rule?
+// Does xgrammar's mask come from the runtime lexicon, and does it respect reachability?
 //
-// The grammar below admits any identifier syntactically. The names that are legal
-// come from the lexicon, set at runtime, so the mask must differ between the two
-// tags and must narrow as a name is typed.
+// The grammar admits any identifier syntactically, so every difference in the mask
+// comes from the lexicon.
+//
+// The tags are deliberately `number` and `number[]`, which are NOT mutually
+// reachable: `items.length` turns a number[] into a number, but nothing turns a
+// number into a number[]. So a number-typed name must appear at a number[] position
+// and NOT the other way round. Picking `number` and `string` would have tested
+// nothing, since each reaches the other and both names are legal at both positions --
+// an earlier version of this test used that pair and asserted the opposite.
 #include <xgrammar/xgrammar.h>
 #include <dlpack/dlpack.h>
 #include <chrono>
@@ -44,10 +50,13 @@ struct Bitmask {
 
 // n= takes a number name, s= takes a string name. Both lexicon rules match any
 // identifier, so only the lexicon distinguishes them.
+// n= requires a number, a= requires a number[]
 static const char* kGrammar =
-    "root ::= (\"n=\" __lex_0 \";\") | (\"s=\" __lex_1 \";\")\n"
+    "root ::= (\"n=\" __lex_0 \";\") | (\"a=\" __lex_1 \";\")\n"
     "__lex_0 ::= [a-zA-Z_] [a-zA-Z0-9_]*\n"
     "__lex_1 ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
+
+static const int TAG_NUMBER = 0, TAG_NUMBER_ARRAY = 1;
 
 int main(int argc, char** argv) {
   auto vocab = LoadVocab(argv[1]);
@@ -56,10 +65,13 @@ int main(int argc, char** argv) {
   GrammarCompiler compiler(ti, 8, false);
   auto compiled = compiler.CompileGrammar(kGrammar, "root");
 
-  auto offered = [&](const std::string& prefix, bool number_tag) {
+  auto offered = [&](const std::string& prefix) {
     GrammarMatcher m(compiled);
-    m.SetLexiconNames(0, {"count", "total"});
-    m.SetLexiconNames(1, {"msg"});
+    m.SetLexiconNames(TAG_NUMBER, {"count", "total"});
+    m.SetLexiconNames(TAG_NUMBER_ARRAY, {"items"});
+    // from the type table: number[] reaches number, number does not reach number[]
+    m.SetLexiconReachableTags(TAG_NUMBER, {TAG_NUMBER, TAG_NUMBER_ARRAY});
+    m.SetLexiconReachableTags(TAG_NUMBER_ARRAY, {TAG_NUMBER_ARRAY});
     if (!m.AcceptString(prefix)) { printf("     could not accept %s\n", prefix.c_str()); return std::set<std::string>{}; }
     Bitmask bm(V);
     m.FillNextTokenBitmask(&bm.t, 0);
@@ -69,20 +81,25 @@ int main(int argc, char** argv) {
     return out;
   };
 
-  auto at_number = offered("n=", true);
-  auto at_string = offered("s=", false);
+  auto at_number = offered("n=");
+  auto at_array = offered("a=");
 
   check(!at_number.empty(), "the number position offers something");
   check(at_number.count("c") == 1, "number position offers 'c' for count");
   check(at_number.count("count") == 1, "number position offers the whole name 'count'");
   check(at_number.count("t") == 1, "number position offers 't' for total");
-  check(at_number.count("m") == 0, "number position does NOT offer 'm' from msg");
-  check(at_string.count("m") == 1, "string position offers 'm' for msg");
-  check(at_string.count("c") == 0, "string position does NOT offer 'c' from count");
-  printf("     number position: %zu tokens, string position: %zu tokens\n",
-         at_number.size(), at_string.size());
+  // the reachability half: items is a number[], and items.length is a number
+  check(at_number.count("item") == 1,
+        "number position DOES offer 'item': a number[] reaches a number via .length");
+  // and the other direction must not hold
+  check(at_array.count("item") == 1, "number[] position offers 'item'");
+  check(at_array.count("c") == 0,
+        "number[] position does NOT offer 'c': a number cannot become a number[]");
+  check(at_array.count("t") == 0, "number[] position does NOT offer 't' either");
+  printf("     number position: %zu tokens, number[] position: %zu tokens\n",
+         at_number.size(), at_array.size());
 
-  auto mid = offered("n=co", true);
+  auto mid = offered("n=co");
   check(mid.count("unt") == 1, "after 'co' the token 'unt' is offered");
   check(mid.count("otal") == 0, "after 'co' nothing from total is offered");
   printf("     after 'n=co': %zu tokens\n", mid.size());
@@ -101,8 +118,10 @@ int main(int argc, char** argv) {
   // cost per mask fill at a lexicon position
   {
     GrammarMatcher m(compiled);
-    m.SetLexiconNames(0, {"count", "total"});
-    m.SetLexiconNames(1, {"msg"});
+    m.SetLexiconNames(TAG_NUMBER, {"count", "total"});
+    m.SetLexiconNames(TAG_NUMBER_ARRAY, {"items"});
+    m.SetLexiconReachableTags(TAG_NUMBER, {TAG_NUMBER, TAG_NUMBER_ARRAY});
+    m.SetLexiconReachableTags(TAG_NUMBER_ARRAY, {TAG_NUMBER_ARRAY});
     m.AcceptString("n=");
     Bitmask bm(V);
     int reps = 20000;
