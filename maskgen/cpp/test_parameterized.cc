@@ -4,6 +4,9 @@
 // A single __bind_type reads the annotation the model wrote and makes it the
 // requirement for the expression, so the same `let` rule serves number and string.
 #include <xgrammar/xgrammar.h>
+
+#include "type_table.h"
+#include "type_table_bind.h"
 #include <dlpack/dlpack.h>
 #include <cstdio>
 #include <fstream>
@@ -13,6 +16,7 @@
 #include <vector>
 
 using namespace xgrammar;
+using namespace maskgen;
 
 static std::vector<std::string> LoadVocab(const std::string& p) {
   std::ifstream f(p); std::string line; std::getline(f, line);
@@ -40,11 +44,40 @@ struct Bitmask {
 
 // ONE let rule. The annotation decides the requirement.
 static const char* kGrammar =
-    "root        ::= \"let x:\" __bind_type \"=\" __lex_name \";\"\n"
-    "__bind_type ::= \"number\" | \"string\"\n"
-    "__lex_name  ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
+    "root      ::= \"let x:\" _type_ann \"=\" _name \";\"\n"
+    "_type_ann ::= \"number\" | \"string\"\n"
+    "_name     ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
+
+static const char* kTable =
+    "_type_ann finish=require_text\n"
+    "_name     finish=produce_text  content=lexicon\n";
 
 static const int T_NUMBER = 0, T_STRING = 1;
+
+/*! \brief Install the inline table on a matcher. */
+static void InstallTable(GrammarMatcher& m) {
+  TypeTable table;
+  std::string error;
+  if (!TypeTable::Parse(kTable, &table, &error)) {
+    printf("FAIL  the inline table parses: %s\n", error.c_str());
+    ++failures;
+    return;
+  }
+  TypeOracle oracle;
+  oracle.resolve = [](std::string_view text) -> int32_t {
+    if (text == "number") return T_NUMBER;
+    if (text == "string") return T_STRING;
+    return -1;
+  };
+  oracle.accepts = [](int32_t need, int32_t have) { return need == have; };
+  std::vector<RuleTypeTransition> transitions;
+  if (!BuildTransitions(table, m, oracle, &transitions, &error)) {
+    printf("FAIL  the table matches the grammar: %s\n", error.c_str());
+    ++failures;
+    return;
+  }
+  m.SetRuleTypeTransitions(std::move(transitions));
+}
 
 int main(int argc, char** argv) {
   auto vocab = LoadVocab(argv[1]);
@@ -64,7 +97,8 @@ int main(int argc, char** argv) {
     // each tag to its own names so the binding is what the result depends on
     m.SetLexiconReachableTags(T_NUMBER, {T_NUMBER});
     m.SetLexiconReachableTags(T_STRING, {T_STRING});
-    m.SetTypeResolver([&](int32_t, std::string_view matched) -> int32_t {
+    InstallTable(m);
+    m.SetTypeResolver([&](int32_t, std::string_view matched, int32_t, int32_t) -> int32_t {
       if (matched == "number") return T_NUMBER;
       if (matched == "string") return T_STRING;
       auto it = declared.find(std::string(matched));
@@ -95,16 +129,32 @@ int main(int argc, char** argv) {
   check(at_number != at_string,
         "the SAME grammar rule gives different masks, decided by the annotation");
 
-  // with no resolver installed, nothing is bound, so nothing is offered
+  // With the table installed but no resolver, the annotation cannot be turned into
+  // a type, so the position carries no requirement and no name group applies.
   {
     GrammarMatcher m(compiled);
+    InstallTable(m);
     m.SetLexiconNames(T_NUMBER, {"count"});
     m.AcceptString("let x:number=");
     Bitmask bm(V);
     m.FillNextTokenBitmask(&bm.t, 0);
     int n = 0;
     for (int i = 0; i < V; ++i) if (bm.allows(i)) ++n;
-    check(n == 0, "without a resolver no type is bound, so nothing is offered");
+    check(n == 0, "without a resolver nothing is bound, so nothing is offered");
+  }
+
+  // With no table at all, the matcher is plain XGrammar: the grammar says a name is
+  // any run of letters and nothing contradicts it. This is the property that keeps
+  // every other grammar unaffected by any of this.
+  {
+    GrammarMatcher m(compiled);
+    m.AcceptString("let x:number=");
+    Bitmask bm(V);
+    m.FillNextTokenBitmask(&bm.t, 0);
+    int n = 0;
+    for (int i = 0; i < V; ++i) if (bm.allows(i)) ++n;
+    check(n > 1000, "with no table the grammar alone decides, offering every name: " +
+                        std::to_string(n));
   }
 
   printf("\n%d failure(s)\n", failures);

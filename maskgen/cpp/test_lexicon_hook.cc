@@ -10,6 +10,9 @@
 // nothing, since each reaches the other and both names are legal at both positions --
 // an earlier version of this test used that pair and asserted the opposite.
 #include <xgrammar/xgrammar.h>
+
+#include "type_table.h"
+#include "type_table_bind.h"
 #include <dlpack/dlpack.h>
 #include <chrono>
 #include <cstdio>
@@ -19,6 +22,7 @@
 #include <vector>
 
 using namespace xgrammar;
+using namespace maskgen;
 using Clock = std::chrono::steady_clock;
 
 static std::vector<std::string> LoadVocab(const std::string& p) {
@@ -52,17 +56,59 @@ struct Bitmask {
 // identifier, so only the lexicon distinguishes them.
 // n= requires a number, a= requires a number[].
 //
-// Note there is ONE lexicon rule, not one per type. __req_<n> says "everything
+// Note there is ONE lexicon rule, not one per type. enter=require says "everything
 // inside me must produce type n"; the parser carries that requirement down and the
 // lexicon reads it from the state. That is what keeps the grammar from needing a
 // rule per type.
 static const char* kGrammar =
-    "root ::= (\"n=\" __req_0 \";\") | (\"a=\" __req_1 \";\")\n"
-    "__req_0 ::= __lex_name\n"
-    "__req_1 ::= __lex_name\n"
-    "__lex_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
+    "root ::= (\"n=\" _wants_number \";\") | (\"a=\" _wants_array \";\")\n"
+    "_wants_number ::= _name\n"
+    "_wants_array ::= _name\n"
+    "_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
+
+// Two positions with fixed requirements, imposed by the construct rather than read
+// from any text -- which is what enter=require is for.
+static const char* kTable =
+    "_wants_number enter=require number    finish=check\n"
+    "_wants_array  enter=require number[]  finish=check\n"
+    "_name         finish=produce_text     content=lexicon\n";
 
 static const int TAG_NUMBER = 0, TAG_NUMBER_ARRAY = 1;
+
+/*! \brief Install a table on a matcher. The tags here are the two types. */
+static void InstallTable(GrammarMatcher& m, const char* table_text) {
+  TypeTable table;
+  std::string error;
+  if (!TypeTable::Parse(table_text, &table, &error)) {
+    printf("FAIL  the inline table parses: %s\n", error.c_str());
+    ++failures;
+    return;
+  }
+  TypeOracle oracle;
+  oracle.resolve = [](std::string_view text) -> int32_t {
+    if (text == "number") return TAG_NUMBER;
+    if (text == "number[]") return TAG_NUMBER_ARRAY;
+    return -1;
+  };
+  oracle.accepts = [](int32_t need, int32_t have) { return need == have; };
+  std::vector<RuleTypeTransition> transitions;
+  if (!BuildTransitions(table, m, oracle, &transitions, &error)) {
+    printf("FAIL  the table matches the grammar: %s\n", error.c_str());
+    ++failures;
+    return;
+  }
+  m.SetRuleTypeTransitions(std::move(transitions));
+  // A name's type is whatever it was declared with; these two tags are the types.
+  m.SetTypeResolver([](int32_t, std::string_view name, int32_t, int32_t) -> int32_t {
+    if (name == "count" || name == "total") return TAG_NUMBER;
+    if (name == "items") return TAG_NUMBER_ARRAY;
+    return -1;
+  });
+  m.SetTypeAcceptor([](int32_t need, int32_t have) { return need == have; });
+}
+
+/*! \brief The table for the one-rule grammars, which have no requirement at all. */
+static const char* kNameOnlyTable = "_name finish=produce_text  content=lexicon\n";
 
 int main(int argc, char** argv) {
   auto vocab = LoadVocab(argv[1]);
@@ -73,6 +119,7 @@ int main(int argc, char** argv) {
 
   auto offered = [&](const std::string& prefix) {
     GrammarMatcher m(compiled);
+    InstallTable(m, kTable);
     m.SetLexiconNames(TAG_NUMBER, {"count", "total"});
     m.SetLexiconNames(TAG_NUMBER_ARRAY, {"items"});
     // from the type table: number[] reaches number, number does not reach number[]
@@ -116,9 +163,11 @@ int main(int argc, char** argv) {
   // which is how identifiers actually arrive: 83% of them in real code.
   {
     auto spaced = compiler.CompileGrammar(
-        "root ::= \"n= \" __req_0 \";\"\n__req_0 ::= __lex_name\n"
-        "__lex_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n", "root");
+        "root ::= \"n= \" _wants_number \";\"\n_wants_number ::= _name\n"
+        "_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n", "root");
     GrammarMatcher m(spaced);
+    InstallTable(m, "_wants_number enter=require number  finish=check\n"
+                    "_name         finish=produce_text   content=lexicon\n");
     m.SetLexiconNames(TAG_NUMBER, {"count", "total"});
     m.SetLexiconReachableTags(TAG_NUMBER, {TAG_NUMBER});
     m.AcceptString("n=");                       // the space NOT yet consumed
@@ -143,9 +192,10 @@ int main(int argc, char** argv) {
   // an identifier position with no requirement must offer nothing, not everything
   {
     auto unreq = compiler.CompileGrammar(
-        "root ::= \"x=\" __lex_name \";\"\n"
-        "__lex_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n", "root");
+        "root ::= \"x=\" _name \";\"\n"
+        "_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n", "root");
     GrammarMatcher m(unreq);
+    InstallTable(m, kNameOnlyTable);
     m.SetLexiconNames(TAG_NUMBER, {"count"});
     m.AcceptString("x=");
     Bitmask bm(V);
@@ -164,6 +214,7 @@ int main(int argc, char** argv) {
   // cost per mask fill at a lexicon position
   {
     GrammarMatcher m(compiled);
+    InstallTable(m, kTable);
     m.SetLexiconNames(TAG_NUMBER, {"count", "total"});
     m.SetLexiconNames(TAG_NUMBER_ARRAY, {"items"});
     m.SetLexiconReachableTags(TAG_NUMBER, {TAG_NUMBER, TAG_NUMBER_ARRAY});

@@ -10,6 +10,9 @@
 //
 // So ';' must be in the mask after msg and absent after count.
 #include <xgrammar/xgrammar.h>
+
+#include "type_table.h"
+#include "type_table_bind.h"
 #include <dlpack/dlpack.h>
 #include <cstdio>
 #include <fstream>
@@ -19,6 +22,7 @@
 #include <vector>
 
 using namespace xgrammar;
+using namespace maskgen;
 
 static std::vector<std::string> LoadVocab(const std::string& p) {
   std::ifstream f(p); std::string line; std::getline(f, line);
@@ -48,10 +52,17 @@ static const int T_NUMBER = 0, T_STRING = 1;
 
 // __check_expr may only end when what it produced satisfies the requirement.
 static const char* kGrammar =
-    "root        ::= \"let x:\" __bind_type \"=\" __check_expr \";\"\n"
-    "__bind_type ::= \"number\" | \"string\"\n"
-    "__check_expr ::= __lex_name\n"
-    "__lex_name  ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
+    "root      ::= \"let x:\" _type_ann \"=\" _expr \";\"\n"
+    "_type_ann ::= \"number\" | \"string\"\n"
+    "_expr     ::= _name\n"
+    "_name     ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
+
+// The same table format as maskgen/fragment.types, inline so the grammar and what
+// its rules mean to the types sit side by side in this one test.
+static const char* kTable =
+    "_type_ann finish=require_text\n"
+    "_expr     enter=fresh  finish=check\n"
+    "_name     finish=produce_text  content=lexicon\n";
 
 int main(int, char** argv) {
   auto vocab = LoadVocab(argv[1]);
@@ -69,7 +80,28 @@ int main(int, char** argv) {
     // string position -- which is exactly why the stop check has work to do
     m.SetLexiconReachableTags(T_NUMBER, {T_NUMBER, T_STRING});
     m.SetLexiconReachableTags(T_STRING, {T_NUMBER, T_STRING});
-    m.SetTypeResolver([&](int32_t, std::string_view matched) -> int32_t {
+    TypeTable table;
+    std::string error;
+    if (!TypeTable::Parse(kTable, &table, &error)) {
+      printf("FAIL  the inline table parses: %s\n", error.c_str());
+      ++failures;
+      return;
+    }
+    TypeOracle oracle;
+    oracle.resolve = [](std::string_view text) -> int32_t {
+      if (text == "number") return T_NUMBER;
+      if (text == "string") return T_STRING;
+      return -1;
+    };
+    oracle.accepts = [](int32_t need, int32_t have) { return need == have; };
+    std::vector<RuleTypeTransition> transitions;
+    if (!BuildTransitions(table, m, oracle, &transitions, &error)) {
+      printf("FAIL  the table matches the grammar: %s\n", error.c_str());
+      ++failures;
+      return;
+    }
+    m.SetRuleTypeTransitions(std::move(transitions));
+    m.SetTypeResolver([&](int32_t, std::string_view matched, int32_t, int32_t) -> int32_t {
       if (matched == "number") return T_NUMBER;
       if (matched == "string") return T_STRING;
       auto it = declared.find(std::string(matched));

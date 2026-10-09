@@ -35,6 +35,7 @@ enum class Enter {
   kInherit,      // take both from the enclosing position
   kFresh,        // take the requirement, but start having produced nothing
   kRequireNone,  // drop the requirement: anything may be produced here
+  kRequire,      // require a fixed type, named by a tag, and produce nothing yet
 };
 
 /*! \brief What happens when a rule finishes and the enclosing position moves on. */
@@ -54,6 +55,8 @@ struct Row {
   Finish finish = Finish::kKeepFirst;
   /*! \brief For kProduce: the tag the environment resolves, never a type. */
   std::string produce_tag;
+  /*! \brief For kRequire: likewise. */
+  std::string require_tag;
   /*! \brief The legal text here comes from the symbol table, not the grammar. */
   bool from_lexicon = false;
   /*! \brief Ask the environment before entering this rule at all. */
@@ -75,6 +78,9 @@ class TypeTable {
  public:
   /*!
    * \brief Read a table. On a malformed line, returns false and sets `error`.
+   *
+   * `out` is cleared first and is left empty on failure, rather than holding
+   * whatever was read before the bad line.
    */
   static bool Parse(std::string_view text, TypeTable* out, std::string* error);
 
@@ -100,7 +106,7 @@ class TypeTable {
   }
 
   /*! \brief The types an occurrence of `rule` starts with, inside `enclosing`. */
-  Types OnEnter(const std::string& rule, const Types& enclosing) const {
+  Types OnEnter(const std::string& rule, const Types& enclosing, const TypeOracle& oracle) const {
     const Row& row = RowFor(rule);
     switch (row.enter) {
       case Enter::kInherit:
@@ -109,6 +115,12 @@ class TypeTable {
         return Types{enclosing.required, -1};
       case Enter::kRequireNone:
         return Types{-1, enclosing.produced};
+      case Enter::kRequire: {
+        // A tag the environment does not know leaves the position unconstrained
+        // rather than impossible, which is the safe direction for a mask.
+        const int32_t t = oracle.resolve ? oracle.resolve(row.require_tag) : -1;
+        return Types{t, -1};
+      }
     }
     return enclosing;
   }
@@ -167,6 +179,13 @@ class TypeTable {
       }
     }
     return out;
+  }
+
+  /*! \brief The type a rule requires of what is inside it, or -1 if it imposes none. */
+  int32_t FixedRequired(const std::string& rule, const TypeOracle& oracle) const {
+    const Row& row = RowFor(rule);
+    if (row.enter != Enter::kRequire || !oracle.resolve) return -1;
+    return oracle.resolve(row.require_tag);
   }
 
   /*!
@@ -234,7 +253,13 @@ inline bool TypeTable::Parse(std::string_view text, TypeTable* out, std::string*
         if (value == "inherit") row.enter = Enter::kInherit;
         else if (value == "fresh") row.enter = Enter::kFresh;
         else if (value == "require_none") row.enter = Enter::kRequireNone;
-        else return fail("unknown enter action \"" + value + "\"");
+        else if (value == "require") {
+          row.enter = Enter::kRequire;
+          if (i + 1 >= words.size()) return fail("enter=require needs a tag");
+          row.require_tag = words[++i];
+        } else {
+          return fail("unknown enter action \"" + value + "\"");
+        }
       } else if (key == "finish") {
         if (value == "pass") row.finish = Finish::kPass;
         else if (value == "keep_first") row.finish = Finish::kKeepFirst;

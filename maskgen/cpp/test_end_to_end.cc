@@ -18,6 +18,9 @@
 // a member is written without one: `count.toString` and not `count.toString()`.
 #include <xgrammar/xgrammar.h>
 #include <dlpack/dlpack.h>
+
+#include "type_table.h"
+#include "type_table_bind.h"
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -27,6 +30,7 @@
 #include <vector>
 
 using namespace xgrammar;
+using namespace maskgen;
 
 static std::vector<std::string> LoadVocab(const std::string& p) {
   std::ifstream f(p); std::string line; std::getline(f, line);
@@ -83,6 +87,14 @@ struct Environment {
       {T_STRA, {T_STR, T_STRA}},
       {T_BOOLA, {T_BOOLA}}};
 
+  /*! \brief The type of `name` as a member of `receiver`, or -1. */
+  int32_t member_type(int32_t receiver, std::string_view name) const {
+    auto group = members.find(receiver);
+    if (group == members.end()) return -1;
+    auto it = group->second.find(std::string(name));
+    return it == group->second.end() ? -1 : it->second;
+  }
+
   bool reachable(int32_t from, int32_t to) const {
     auto it = reaches.find(to);
     if (it == reaches.end()) return false;
@@ -91,9 +103,31 @@ struct Environment {
   }
 };
 
-/*! \brief Install an environment on a matcher, including the fixed-type constructs. */
-void Install(GrammarMatcher& m, const Environment& env, int32_t member_rule,
-             int32_t call_rule, const std::map<int32_t, int32_t>& produced) {
+/*! \brief The rules this environment has to recognise by name. */
+struct RuleIds {
+  int32_t member_name = -1;
+  int32_t call_step = -1;
+  int32_t member_step = -1;
+};
+
+/*! \brief What the type table needs from this environment. */
+inline TypeOracle OracleFor(const Environment& env) {
+  TypeOracle oracle;
+  oracle.resolve = [&env](std::string_view text) -> int32_t {
+    for (int32_t t = 0; t < T_NTYPES; ++t) {
+      if (text == kTypeNames[t]) return t;
+    }
+    auto sym = env.symbols.find(std::string(text));
+    return sym == env.symbols.end() ? -1 : sym->second;
+  };
+  oracle.accepts = [](int32_t required, int32_t produced) { return required == produced; };
+  return oracle;
+}
+
+/*! \brief Install an environment on a matcher, driven by the type table. */
+void Install(
+    GrammarMatcher& m, const Environment& env, const TypeTable& table, const RuleIds& rules
+) {
   for (int32_t t = 0; t < T_NTYPES; ++t) {
     std::vector<std::string> names;
     for (const auto& [n, ty] : env.symbols) if (ty == t) names.push_back(n);
@@ -113,32 +147,45 @@ void Install(GrammarMatcher& m, const Environment& env, int32_t member_rule,
       m.SetLexiconReachableTags(MemberTag(r, need), {MemberTag(r, need)});
     }
   }
-  m.SetTypeResolver([&env, produced](int32_t rule, std::string_view text) -> int32_t {
-    // A construct with a fixed type answers whatever its text, including no text:
-    // that is how prediction learns the type without waiting for the match.
-    auto fixed = produced.find(rule);
-    if (fixed != produced.end()) return fixed->second;
-    for (int32_t t = 0; t < T_NTYPES; ++t) if (text == kTypeNames[t]) return t;
-    auto sym = env.symbols.find(std::string(text));
-    if (sym != env.symbols.end()) return sym->second;
-    for (const auto& [recv, ms] : env.members) {
-      auto mem = ms.find(std::string(text));
-      if (mem != ms.end()) return mem->second;
-    }
-    return -1;
-  });
-  m.SetTypeAcceptor([](int32_t need, int32_t have) { return need == have; });
-  m.SetLexiconTagResolver([member_rule](int32_t rule, int32_t need, int32_t have) -> int32_t {
-    if (rule == member_rule) {
-      if (have < 0) return -1;                       // no receiver, so no members
-      return MemberTag(have, need < 0 ? T_ANY : need);
-    }
-    return need < 0 ? T_ANY : need;
-  });
-  m.SetStepPredicate([call_rule](int32_t rule, int32_t, int32_t have) {
-    if (rule == call_rule) return false;             // nothing here is callable
-    if (rule == -1) return true;
-    return have >= 0;                                // a member needs a receiver
+
+  const TypeOracle oracle = OracleFor(env);
+  std::vector<RuleTypeTransition> transitions;
+  std::string error;
+  if (!BuildTransitions(table, m, oracle, &transitions, &error)) {
+    printf("FAIL  the table does not match the grammar: %s\n", error.c_str());
+    return;
+  }
+  m.SetRuleTypeTransitions(std::move(transitions));
+
+  // What a piece of matched text means. A member name resolves against the type it
+  // is a member of, which is whatever the expression has produced so far.
+  m.SetTypeResolver(
+      [&env, rules](int32_t rule, std::string_view text, int32_t, int32_t have) -> int32_t {
+        if (rule == rules.member_name) return env.member_type(have, text);
+        for (int32_t t = 0; t < T_NTYPES; ++t) {
+          if (text == kTypeNames[t]) return t;
+        }
+        auto sym = env.symbols.find(std::string(text));
+        return sym == env.symbols.end() ? -1 : sym->second;
+      }
+  );
+  m.SetTypeAcceptor([](int32_t required, int32_t produced) { return required == produced; });
+  // Which group of names a position draws from. A member position draws from the
+  // members of the receiver that can still reach what the position requires.
+  m.SetLexiconTagResolver(
+      [rules](int32_t rule, int32_t need, int32_t have) -> int32_t {
+        if (rule == rules.member_name) {
+          if (have < 0) return -1;              // no receiver, so no members
+          return MemberTag(have, need < 0 ? T_ANY : need);
+        }
+        return need < 0 ? T_ANY : need;
+      }
+  );
+  // Nothing in this environment is callable, and a member needs a receiver.
+  m.SetStepPredicate([rules](int32_t rule, int32_t, int32_t have) {
+    if (rule == rules.call_step) return false;
+    if (rule == rules.member_step) return have >= 0;
+    return true;
   });
 }
 
@@ -176,21 +223,27 @@ int main(int, char** argv) {
   GrammarCompiler compiler(ti, 8, false);
   auto compiled = compiler.CompileGrammar(gs.str(), "root");
 
+  TypeTable table;
+  {
+    std::ifstream tf(std::string(MASKGEN_DIR) + "/fragment.types");
+    std::stringstream ts; ts << tf.rdbuf();
+    std::string error;
+    check(TypeTable::Parse(ts.str(), &table, &error), "fragment.types parses: " + error);
+  }
+
   Environment env;
-  int32_t member_rule, call_rule;
-  std::map<int32_t, int32_t> produced;
+  RuleIds rules;
   {
     GrammarMatcher probe(compiled);
-    member_rule = probe.GetRuleId("__lex_member");
-    call_rule = probe.GetRuleId("__step_call");
-    for (const auto& [name, ty] : std::map<std::string, int32_t>{
-             {"__have_num_lit", T_NUM}, {"__have_str_lit", T_STR},
-             {"__have_bool_lit", T_BOOL}, {"__have_cmp", T_BOOL}}) {
-      int32_t id = probe.GetRuleId(name);
-      check(id >= 0, "the grammar has a rule named " + name);
-      if (id >= 0) produced[id] = ty;
-    }
-    check(member_rule >= 0 && call_rule >= 0, "the grammar has __lex_member and __step_call");
+    rules.member_name = probe.GetRuleId("_member_name");
+    rules.call_step = probe.GetRuleId("_call_step");
+    rules.member_step = probe.GetRuleId("_member_step");
+    check(rules.member_name >= 0 && rules.call_step >= 0 && rules.member_step >= 0,
+          "the grammar defines the rules this environment recognises");
+    std::vector<RuleTypeTransition> transitions;
+    std::string error;
+    check(BuildTransitions(table, probe, OracleFor(env), &transitions, &error),
+          "every row of the table names a rule of the grammar: " + error);
   }
 
   // A well-typed program. Each statement needs a different part of the machinery:
@@ -209,7 +262,7 @@ int main(int, char** argv) {
 
   {
     GrammarMatcher m(compiled);
-    Install(m, env, member_rule, call_rule, produced);
+    Install(m, env, table, rules);
     Bitmask mask(V);
     size_t accepted = 0;
     std::string refused_at;
@@ -249,7 +302,7 @@ int main(int, char** argv) {
   for (const auto& [text, why] : ill_typed) {
     auto ill = Tokenize(text, by_text);
     GrammarMatcher m(compiled);
-    Install(m, env, member_rule, call_rule, produced);
+    Install(m, env, table, rules);
     Bitmask mask(V);
     bool blocked = false;
     for (int32_t id : ill) {
@@ -274,7 +327,7 @@ int main(int, char** argv) {
   for (const auto& text : well_typed) {
     auto ok = Tokenize(text, by_text);
     GrammarMatcher m(compiled);
-    Install(m, env, member_rule, call_rule, produced);
+    Install(m, env, table, rules);
     Bitmask mask(V);
     bool all = true;
     std::string got;

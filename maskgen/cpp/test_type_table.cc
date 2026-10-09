@@ -108,7 +108,7 @@ int main(int, char**) {
 
   // An unlisted rule passes the requirement down and adopts the first type below it.
   {
-    const Types inside = table.OnEnter("primary", Types{STRING, -1});
+    const Types inside = table.OnEnter("primary", Types{STRING, -1}, oracle);
     check(inside == Types{STRING, -1}, "an unlisted rule inherits the requirement");
     const Types after = table.OnFinish("primary", Types{STRING, NUMBER}, Types{STRING, -1}, "", oracle);
     check(after.produced == NUMBER, "an unlisted rule carries a produced type up");
@@ -126,7 +126,7 @@ int main(int, char**) {
 
   // An expression starts fresh and may only finish when it satisfies its position.
   {
-    const Types inside = table.OnEnter("_expr", Types{STRING, NUMBER});
+    const Types inside = table.OnEnter("_expr", Types{STRING, NUMBER}, oracle);
     check(inside == Types{STRING, -1}, "expr keeps the requirement but produces nothing yet");
     check(table.MayFinish("_expr", Types{STRING, STRING}, oracle), "expr may finish on a match");
     check(!table.MayFinish("_expr", Types{STRING, NUMBER}, oracle), "expr may not finish otherwise");
@@ -160,10 +160,26 @@ int main(int, char**) {
   {
     const Types after = table.OnFinish("_cmp", Types{STRING, STRING}, Types{STRING, -1}, "", oracle);
     check(after.produced == BOOLEAN, "a comparison produces boolean, not its operand's type");
-    const Types operand = table.OnEnter("_cmp_operand", Types{BOOLEAN, -1});
+    const Types operand = table.OnEnter("_cmp_operand", Types{BOOLEAN, -1}, oracle);
     check(operand.required == -1, "a comparison's operand carries no requirement");
     check(table.FixedProduced("_cmp", oracle) == BOOLEAN, "a comparison's type is known in advance");
     check(table.FixedProduced("_name", oracle) == -1, "a name's type is not");
+  }
+
+  // A rule may also impose a requirement by fiat, with no text to read: the
+  // condition of an `if` is a boolean whatever surrounds it. The fragment has no
+  // such rule yet, so this is checked on an inline table.
+  {
+    TypeTable t; std::string err;
+    check(TypeTable::Parse("_cond enter=require boolean finish=check\n", &t, &err),
+          "enter=require parses");
+    TypeTable bad;
+    check(!TypeTable::Parse("_cond enter=require\n", &bad, &err), "enter=require needs a tag");
+    const Types inside = t.OnEnter("_cond", Types{STRING, STRING}, oracle);
+    check(inside == Types{BOOLEAN, -1}, "a required position ignores what encloses it");
+    check(t.FixedRequired("_cond", oracle) == BOOLEAN, "its requirement is known in advance");
+    const Types unknown_tag = t.OnEnter("_absent", Types{STRING, NUMBER}, oracle);
+    check(unknown_tag == Types{STRING, NUMBER}, "an unlisted rule still inherits");
   }
 
   // Literals.
