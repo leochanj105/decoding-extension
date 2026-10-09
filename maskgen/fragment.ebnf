@@ -5,7 +5,7 @@
 # carried in the parser state. See FRAGMENT_GRAMMAR.md for why each construct is
 # here, and FRAGMENT.md for what was left out of TypeScript and why.
 #
-# Three rule-name prefixes are read by the matcher, not just by the parser:
+# These rule-name prefixes are read by the matcher, not just by the parser:
 #
 #   __bind_<x>   on completing, the text it matched decides the type required of
 #                whatever follows it
@@ -13,9 +13,22 @@
 #                grammar only says "an identifier goes here"
 #   __check_<x>  it may only finish when the type it produced satisfies the type
 #                its position requires
+#   __have_<x>   it produces a fixed type, whatever is inside it: a numeric literal
+#                is a number, a comparison is a boolean. The grammar names the
+#                construct, never the type; the environment says which type it is
+#   __step_<x>   a continuation that can be refused as a whole, such as a call on
+#                something that is not a function
+#   __req_any    it drops whatever requirement surrounds it. The operands of == need
+#                this: at a position requiring boolean, `count == count` is well
+#                typed, and the operands must not be asked to produce boolean
 #
 # These rules must survive grammar optimisation: the matcher finds them by name,
 # so inlining one makes it silently disappear. RuleInliner exempts these prefixes.
+#
+# They must also survive the right-recursion optimisation in Predict, which skips a
+# parent rule's completion when the child sits in tail position. An annotated rule
+# does its work at completion, so eliding it loses the effect with no error. The
+# parser asks RuleNeedsCompletionEvent before taking that shortcut.
 
 root          ::= ws stmt (ws stmt)* ws
 
@@ -47,13 +60,24 @@ type          ::= "number" | "string" | "boolean"
 # where any new name is legal. The same rule as [a-zA-Z_] [a-zA-Z0-9_]* is a fraction
 # of that.
 __check_expr  ::= eq
-eq            ::= sum (ws "==" ws sum)?
+eq            ::= sum | __have_cmp
+__have_cmp    ::= __req_any ws "==" ws __req_any
+__req_any     ::= sum
 sum           ::= primary (ws "+" ws primary)*
-primary       ::= num_lit | str_lit | bool_lit | postfix | "(" ws __check_expr ws ")"
+primary       ::= __have_num_lit | __have_str_lit | __have_bool_lit | postfix | "(" ws __check_expr ws ")"
+__have_num_lit  ::= num_lit
+__have_str_lit  ::= str_lit
+__have_bool_lit ::= bool_lit
 
 # a name, then any number of ".member" or "(argument)" steps
 postfix       ::= __lex_name trailer*
-trailer       ::= "." __lex_member | "(" ws __check_expr ws ")"
+# Each continuation is its own __step_ rule so it can be refused as a whole. The
+# grammar permits `count(...)` -- only the type table knows count is a number and
+# not a function, so the call alternative is gated rather than written out of the
+# grammar.
+trailer       ::= __step_member | __step_call
+__step_member ::= "." __lex_member
+__step_call   ::= "(" ws __check_expr ws ")"
 
 num_lit       ::= [0-9] [0-9]*
 str_lit       ::= "\"" [a-zA-Z0-9 _.,!?-]* "\""
