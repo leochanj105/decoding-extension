@@ -110,9 +110,35 @@ int main(int argc, char** argv) {
   check(mid.count("otal") == 0, "after 'co' nothing from total is offered");
   printf("     after 'n=co': %zu tokens\n", mid.size());
 
-  // the known gap: a token spanning the end of a name is not offered
-  check(at_number.count("count;") == 0,
-        "straddling token 'count;' is NOT offered (known gap, needs the Advance hook)");
+  // Boundary-crossing tokens. The earlier version of this test asserted that
+  // "count;" was not offered and passed -- but "count;" is not a token in this
+  // vocabulary at all, so it proved nothing. The real cases are space-prefixed,
+  // which is how identifiers actually arrive: 83% of them in real code.
+  {
+    auto spaced = compiler.CompileGrammar(
+        "root ::= \"n= \" __req_0 \";\"\n__req_0 ::= __lex_name\n"
+        "__lex_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n", "root");
+    GrammarMatcher m(spaced);
+    m.SetLexiconNames(TAG_NUMBER, {"count", "total"});
+    m.SetLexiconReachableTags(TAG_NUMBER, {TAG_NUMBER});
+    m.AcceptString("n=");                       // the space NOT yet consumed
+    Bitmask bm(V);
+    m.FillNextTokenBitmask(&bm.t, 0);
+    std::set<std::string> at;
+    const auto& decoded = ti.GetDecodedVocab();
+    for (int i = 0; i < V; ++i) if (bm.allows(i)) at.insert(decoded[i]);
+    check(at.count(" count") == 1,
+          "a token spanning the space AND a whole name is offered");
+    check(at.count(" c") == 1, "so is one spanning the space and one letter");
+    check(at.count(" cat") == 0,
+          "but ' cat' is refused: no declared name starts 'ca'");
+    check(at.count(" the") == 0 && at.count(" x") == 0,
+          "and neither are ' the' nor ' x'");
+    check(at.size() == 10,
+          "exactly 10 tokens: the space, plus it joined to every prefix of the "
+          "two names");
+    printf("     crossing the space boundary: %zu tokens\n", at.size());
+  }
 
   // an identifier position with no requirement must offer nothing, not everything
   {
