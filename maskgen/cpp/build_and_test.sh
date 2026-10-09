@@ -49,6 +49,7 @@ for src in "$HERE"/test_*.cc; do
   g++ -O2 -std=c++17 \
     -I"$XG/include" -I"$XG/cpp" \
     -I"$XG/3rdparty/dlpack/include" -I"$XG/3rdparty/picojson" \
+    -DMASKGEN_DIR="\"$HERE/..\"" \
     "$src" -o "$exe" -L"$BUILD" -lxgrammar -lpthread 2>&1 | grep -v lto-wrapper || true
   echo "--- $(basename "$exe") ---"
   "$exe" "$VOCAB"   # tests that need no vocabulary simply ignore it

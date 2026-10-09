@@ -1,112 +1,78 @@
-# The typed TypeScript fragment.
+# The TypeScript fragment, as a grammar and nothing else.
 #
-# No type is named anywhere in this file. That is the whole point: one rule per
-# construct, not one per type. Which types are involved is decided at runtime and
-# carried in the parser state. See FRAGMENT_GRAMMAR.md for why each construct is
-# here, and FRAGMENT.md for what was left out of TypeScript and why.
+# This file says what text is well formed. It says nothing about types: no type is
+# named here, no rule means "a string goes here", and nothing in it depends on what
+# has been declared. Which rule does what to the types is in fragment.types, and the
+# names and their types come from the environment at runtime.
 #
-# These rule-name prefixes are read by the matcher, not just by the parser:
-#
-#   __bind_<x>   on completing, the text it matched decides the type required of
-#                whatever follows it
-#   __lex_<x>    its legal content comes from the runtime symbol table, so the
-#                grammar only says "an identifier goes here"
-#   __check_<x>  it may only finish when the type it produced satisfies the type
-#                its position requires
-#   __have_<x>   it produces a fixed type, whatever is inside it: a numeric literal
-#                is a number, a comparison is a boolean. The grammar names the
-#                construct, never the type; the environment says which type it is
-#   __step_<x>   a continuation that can be refused as a whole, such as a call on
-#                something that is not a function
-#   __req_any    it drops whatever requirement surrounds it. The operands of == need
-#                this: at a position requiring boolean, `count == count` is well
-#                typed, and the operands must not be asked to produce boolean
-#
-# These rules must survive grammar optimisation: the matcher finds them by name,
-# so inlining one makes it silently disappear. RuleInliner exempts these prefixes.
-#
-# They must also survive the right-recursion optimisation in Predict, which skips a
-# parent rule's completion when the child sits in tail position. An annotated rule
-# does its work at completion, so eliding it loses the effect with no error. The
-# parser asks RuleNeedsCompletionEvent before taking that shortcut.
-
-root          ::= ws stmt (ws stmt)* ws
-
-stmt          ::= let_stmt | assign_stmt | declare_stmt
-
-# "let x : T = e ;"  -- the annotation decides what e must produce
-let_stmt      ::= "let" ws ident ws ":" ws __bind_type ws "=" ws __check_expr ws ";"
-
-# "x = e ;"  -- the target's declared type decides what e must produce
-assign_stmt   ::= __bind_target ws "=" ws __check_expr ws ";"
-
-# "declare function f(a: T): U ;"  -- a signature, no body, so no nested scopes
-declare_stmt  ::= "declare" ws "function" ws ident ws "(" ws ident ws ":" ws type ws ")" ws ":" ws type ws ";"
-
-# the two places a requirement enters from text the model wrote
-__bind_type   ::= type
-__bind_target ::= __lex_name
-
-type          ::= "number" | "string" | "boolean"
-                | "number" "[" "]" | "string" "[" "]" | "boolean" "[" "]"
-
-# Expressions. eq and sum exist only to give == and + their precedence, so that
-# a + b == c groups as (a + b) == c and b.c binds tighter than a + b.
+# A leading underscore on a rule name means only that something outside this file
+# refers to the rule by name, so grammar optimisation must not merge it away. It
+# carries no meaning beyond that. Every underscored rule has a row in
+# fragment.types, and every row names an underscored rule.
 #
 # Repetition is written with * and ? throughout, never as recursion. XGrammar has a
-# fast path for a repeated character class and for a self-recursive element; writing
-# `ident ::= [a-zA-Z_] | [a-zA-Z_] ident_rest` instead predicts a fresh rule
-# occurrence per byte, and measured 24 ms for one mask at the position after `let `
-# where any new name is legal. The same rule as [a-zA-Z_] [a-zA-Z0-9_]* is a fraction
-# of that.
-__check_expr  ::= eq
-eq            ::= sum | __have_cmp
-__have_cmp    ::= __req_any ws "==" ws __req_any
-__req_any     ::= sum
-sum           ::= primary (ws "+" ws primary)*
-primary       ::= __have_num_lit | __have_str_lit | __have_bool_lit | postfix | "(" ws __check_expr ws ")"
-__have_num_lit  ::= num_lit
-__have_str_lit  ::= str_lit
-__have_bool_lit ::= bool_lit
+# fast path for a repeated character class; writing `ident ::= [a-zA-Z_] | [a-zA-Z_]
+# ident_rest` instead predicts a fresh rule occurrence per byte, and measured 24 ms
+# for one mask at the position after `let `, against a fraction of that for the same
+# rule written as [a-zA-Z_] [a-zA-Z0-9_]*.
+#
+# A rule whose text is matched against the symbol table must spell its character
+# classes out rather than delegating to a shared rule. The runtime refuses a byte
+# only while the parser sits inside such a rule, so borrowing a shared tail would
+# put the rest of every name outside it, where nothing is checked, and `coun`
+# followed by anything at all would be accepted.
+
+root           ::= ws stmt (ws stmt)* ws
+
+stmt           ::= let_stmt | assign_stmt | declare_stmt
+
+# "let x : T = e ;"
+let_stmt       ::= "let" ws ident ws ":" ws _type_ann ws "=" ws _expr ws ";"
+
+# "x = e ;"
+assign_stmt    ::= _assign_target ws "=" ws _expr ws ";"
+
+# "declare function f(a: T): U ;" -- a signature, no body, so no nested scopes
+declare_stmt   ::= "declare" ws "function" ws ident ws "(" ws ident ws ":" ws type ws ")"
+                   ws ":" ws type ws ";"
+
+_type_ann      ::= type
+_assign_target ::= _name
+
+type           ::= "number" | "string" | "boolean"
+                 | "number" "[" "]" | "string" "[" "]" | "boolean" "[" "]"
+
+# Expressions. eq and _sum exist to give == and + their precedence, so that
+# a + b == c groups as (a + b) == c, and b.c binds tighter than a + b.
+_expr          ::= eq
+eq             ::= _sum | _cmp
+_cmp           ::= _cmp_operand ws "==" ws _cmp_operand
+_cmp_operand   ::= _sum
+_sum           ::= primary (ws "+" ws primary)*
+primary        ::= _num_lit | _str_lit | _bool_lit | _postfix | "(" ws _expr ws ")"
+
+_num_lit       ::= [0-9] [0-9]*
+_str_lit       ::= "\"" [a-zA-Z0-9 _.,!?-]* "\""
+_bool_lit      ::= "true" | "false"
 
 # a name, then any number of ".member" or "(argument)" steps
-postfix       ::= __lex_name trailer*
-# Each continuation is its own __step_ rule so it can be refused as a whole. The
-# grammar permits `count(...)` -- only the type table knows count is a number and
-# not a function, so the call alternative is gated rather than written out of the
-# grammar.
-trailer       ::= __step_member | __step_call
-__step_member ::= "." __lex_member
-__step_call   ::= "(" ws __check_expr ws ")"
-
-num_lit       ::= [0-9] [0-9]*
-str_lit       ::= "\"" [a-zA-Z0-9 _.,!?-]* "\""
-bool_lit      ::= "true" | "false"
+_postfix       ::= _name _trailer*
+_trailer       ::= _member_step | _call_step
+_member_step   ::= "." _member_name
+# A call is grammatical on any name. Whether the thing is callable is not a
+# syntactic question, so the runtime refuses this step rather than the grammar.
+_call_step     ::= "(" ws _expr ws ")"
 
 # A name being DECLARED is unconstrained, so it is an ordinary rule.
-ident         ::= [a-zA-Z_] [a-zA-Z0-9_]*
+ident          ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
-# A name being USED comes from the symbol table.
-#
-# These must NOT delegate to a shared rule such as ident_rest. The matcher vetoes a
-# byte only when the state sits inside a __lex_ rule, so borrowing ident_rest would
-# put the tail of every name inside an ordinary rule where nothing is vetoed -- and
-# `coun` followed by anything would be accepted. Spelling the character class out
-# keeps every byte of the name inside the lexicon rule.
-__lex_name    ::= [a-zA-Z_] [a-zA-Z0-9_]*
-__lex_member  ::= [a-zA-Z_] [a-zA-Z0-9_]*
+# A name being USED, and a member being named, come from the symbol table.
+_name          ::= [a-zA-Z_] [a-zA-Z0-9_]*
+_member_name   ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
 # Whitespace is flexible: any amount, anywhere, including newlines and indentation.
-#
-# This costs about 4% of generation time and is worth it. Positions where more
-# whitespace AND an identifier are both legal are expensive -- the legal token set
-# roughly doubles, because every token starting with a space and running on into
-# letters becomes a candidate that must be walked a byte at a time. Measured at the
-# position after `let`: 17 ms with flexible whitespace against 221 us with exactly
-# one space.
-#
-# But that is the worst position, not the average. Over a whole statement the mean
-# mask costs 1,252 us flexible against 40 us fixed, and 1,252 us is under 4% of a
-# 33 ms model step. Forcing one canonical layout to save that was not worth
-# crippling the language for.
-ws            ::= [ \t\n]*
+# This costs about 4% of generation time, measured over a whole statement, and was
+# not worth crippling the language to avoid. The expensive positions are those where
+# more whitespace AND an identifier are both legal, since every token that starts
+# with a space and runs on into letters becomes a candidate to walk byte by byte.
+ws             ::= [ \t\n]*

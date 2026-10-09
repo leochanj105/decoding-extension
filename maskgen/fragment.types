@@ -1,0 +1,80 @@
+# How each grammar rule transforms the types carried through a parse.
+#
+# fragment.ebnf is a plain grammar: it says what text is well formed and nothing
+# about types. This file says what the types do, one line per rule, and it is the
+# only place that knows. Nothing here depends on a parser, so it can be read and
+# tested on its own -- see maskgen/cpp/test_type_table.cc.
+#
+# Two values travel with the parser. REQUIRED is the type this position must end up
+# producing, which comes from above: `let x : string =` requires a string of
+# everything after it. PRODUCED is the type of what has been written here so far,
+# which comes from below: after `count` it is number, after `count.toFixed` string.
+#
+# Each line is:   <rule>  <key>=<value> ...
+# Every rule named here is underscored in fragment.ebnf, and every underscored rule
+# there has a line here. The underscore means only "named from outside the grammar".
+#
+# enter=, applied when the parser starts a new occurrence of the rule:
+#
+#   inherit        take REQUIRED and PRODUCED from the enclosing position (default)
+#   fresh          take REQUIRED, but start with nothing PRODUCED. For a position
+#                  that begins a new value, such as a call argument
+#   require_none   drop REQUIRED: this position may produce anything. For the
+#                  operands of ==, which are constrained by each other rather than
+#                  by whatever the comparison itself has to satisfy
+#
+# finish=, applied when the rule completes and the enclosing position moves past it:
+#
+#   pass           leave the enclosing PRODUCED alone
+#   keep_first     adopt this rule's PRODUCED, unless something was produced already
+#                  (default: right for an ordinary rule with one value-producing child)
+#   replace        adopt this rule's PRODUCED, overwriting. For a continuation,
+#                  where each step retypes everything before it: `msg` produced
+#                  string, then `.length` makes the whole thing a number
+#   produce <tag>  produce a type the environment names, whatever the text. <tag> is
+#                  a name the environment resolves; it is never a type in this file
+#   produce_text   produce the type the environment gives for the text matched,
+#                  which is how a name gets the type it was declared with
+#   require_text   set REQUIRED from the text matched, which is how a `: string`
+#                  annotation constrains what follows it
+#   check          refuse to finish unless PRODUCED satisfies REQUIRED
+#
+# content=lexicon  the legal text here is not in the grammar: it comes from the
+#                  symbol table, and a byte is refused as soon as no name in scope
+#                  still matches what has been written
+#
+# gate=environment the environment is asked before the parser may enter this rule at
+#                  all, which is how a call on something that is not a function is
+#                  refused without writing that into the grammar
+
+# ---- where a requirement enters the parse ----
+_type_ann       finish=require_text
+_assign_target  finish=require_text  content=lexicon
+
+# ---- where a requirement is discharged ----
+_expr           enter=fresh          finish=check
+
+# ---- operators ----
+# A comparison is a boolean however its operands are typed, and its operands are
+# unconstrained by what the comparison itself must satisfy.
+_cmp            finish=produce boolean
+_cmp_operand    enter=require_none   finish=pass
+# `+` keeps the first operand's type. That is wrong for `3 + "x"`, which TypeScript
+# types as a string; deriving an operator's result from both operands is not done
+# yet, and this line is where it would go.
+_sum            finish=keep_first
+
+# ---- literals ----
+_num_lit        finish=produce number
+_str_lit        finish=produce string
+_bool_lit       finish=produce boolean
+
+# ---- names ----
+_name           finish=produce_text  content=lexicon
+_member_name    finish=produce_text  content=lexicon
+
+# ---- continuations: each step retypes the whole expression ----
+_postfix        finish=replace
+_trailer        finish=replace
+_member_step    finish=replace       gate=environment
+_call_step      finish=replace       gate=environment
