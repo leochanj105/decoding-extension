@@ -17,18 +17,18 @@
 # These rules must survive grammar optimisation: the matcher finds them by name,
 # so inlining one makes it silently disappear. RuleInliner exempts these prefixes.
 
-root          ::= stmt+
+root          ::= stmt (nl stmt)* nl?
 
 stmt          ::= let_stmt | assign_stmt | declare_stmt
 
 # "let x : T = e ;"  -- the annotation decides what e must produce
-let_stmt      ::= "let" sp ident ws ":" ws __bind_type ws "=" ws __check_expr ws ";" ws
+let_stmt      ::= "let " ident " : " __bind_type " = " __check_expr ";"
 
 # "x = e ;"  -- the target's declared type decides what e must produce
-assign_stmt   ::= __bind_target ws "=" ws __check_expr ws ";" ws
+assign_stmt   ::= __bind_target " = " __check_expr ";"
 
 # "declare function f(a: T): U ;"  -- a signature, no body, so no nested scopes
-declare_stmt  ::= "declare" sp "function" sp ident ws "(" ws ident ws ":" ws type ws ")" ws ":" ws type ws ";" ws
+declare_stmt  ::= "declare function " ident "(" ident " : " type ") : " type ";"
 
 # the two places a requirement enters from text the model wrote
 __bind_type   ::= type
@@ -47,13 +47,13 @@ type          ::= "number" | "string" | "boolean"
 # where any new name is legal. The same rule as [a-zA-Z_] [a-zA-Z0-9_]* is a fraction
 # of that.
 __check_expr  ::= eq
-eq            ::= sum (ws "==" ws sum)?
-sum           ::= primary (ws "+" ws primary)*
-primary       ::= num_lit | str_lit | bool_lit | postfix | "(" ws __check_expr ws ")"
+eq            ::= sum (" == " sum)?
+sum           ::= primary (" + " primary)*
+primary       ::= num_lit | str_lit | bool_lit | postfix | "(" __check_expr ")"
 
 # a name, then any number of ".member" or "(argument)" steps
 postfix       ::= __lex_name trailer*
-trailer       ::= "." __lex_member | "(" ws __check_expr ws ")"
+trailer       ::= "." __lex_member | "(" __check_expr ")"
 
 num_lit       ::= [0-9] [0-9]*
 str_lit       ::= "\"" [a-zA-Z0-9 _.,!?-]* "\""
@@ -72,5 +72,17 @@ ident         ::= [a-zA-Z_] [a-zA-Z0-9_]*
 __lex_name    ::= [a-zA-Z_] [a-zA-Z0-9_]*
 __lex_member  ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
-sp            ::= [ \t\n]+
-ws            ::= [ \t\n]*
+# Whitespace is FIXED, not flexible, and that is a performance decision rather
+# than a language one. Measured at the position after `let `: when whitespace and
+# an identifier are both legal at the same place, the legal token set doubles --
+# from 33,414 to 76,146 -- because every token starting with a space and running
+# into letters becomes a candidate that must be walked one byte at a time. That
+# cost one mask 17 ms instead of 221 us, a 78x difference, and it made no
+# difference whether the whitespace was bounded or whether newlines were allowed:
+# one-or-two spaces was as slow as unbounded.
+#
+# So separators are spelled out exactly, and a newline appears only between
+# statements, where no identifier can start. The price is that generated code has
+# one canonical layout and cannot be indented. Relaxing this is possible and costs
+# about 150x, which is now a known number rather than a surprise.
+nl            ::= "\n"
