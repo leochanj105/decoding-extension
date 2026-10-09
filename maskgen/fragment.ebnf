@@ -1,0 +1,76 @@
+# The typed TypeScript fragment.
+#
+# No type is named anywhere in this file. That is the whole point: one rule per
+# construct, not one per type. Which types are involved is decided at runtime and
+# carried in the parser state. See FRAGMENT_GRAMMAR.md for why each construct is
+# here, and FRAGMENT.md for what was left out of TypeScript and why.
+#
+# Three rule-name prefixes are read by the matcher, not just by the parser:
+#
+#   __bind_<x>   on completing, the text it matched decides the type required of
+#                whatever follows it
+#   __lex_<x>    its legal content comes from the runtime symbol table, so the
+#                grammar only says "an identifier goes here"
+#   __check_<x>  it may only finish when the type it produced satisfies the type
+#                its position requires
+#
+# These rules must survive grammar optimisation: the matcher finds them by name,
+# so inlining one makes it silently disappear. RuleInliner exempts these prefixes.
+
+root          ::= stmt+
+
+stmt          ::= let_stmt | assign_stmt | declare_stmt
+
+# "let x : T = e ;"  -- the annotation decides what e must produce
+let_stmt      ::= "let" sp ident ws ":" ws __bind_type ws "=" ws __check_expr ws ";" ws
+
+# "x = e ;"  -- the target's declared type decides what e must produce
+assign_stmt   ::= __bind_target ws "=" ws __check_expr ws ";" ws
+
+# "declare function f(a: T): U ;"  -- a signature, no body, so no nested scopes
+declare_stmt  ::= "declare" sp "function" sp ident ws "(" ws ident ws ":" ws type ws ")" ws ":" ws type ws ";" ws
+
+# the two places a requirement enters from text the model wrote
+__bind_type   ::= type
+__bind_target ::= __lex_name
+
+type          ::= "number" | "string" | "boolean"
+                | "number" "[" "]" | "string" "[" "]" | "boolean" "[" "]"
+
+# Expressions. eq and sum exist only to give == and + their precedence, so that
+# a + b == c groups as (a + b) == c and b.c binds tighter than a + b.
+#
+# Repetition is written with * and ? throughout, never as recursion. XGrammar has a
+# fast path for a repeated character class and for a self-recursive element; writing
+# `ident ::= [a-zA-Z_] | [a-zA-Z_] ident_rest` instead predicts a fresh rule
+# occurrence per byte, and measured 24 ms for one mask at the position after `let `
+# where any new name is legal. The same rule as [a-zA-Z_] [a-zA-Z0-9_]* is a fraction
+# of that.
+__check_expr  ::= eq
+eq            ::= sum (ws "==" ws sum)?
+sum           ::= primary (ws "+" ws primary)*
+primary       ::= num_lit | str_lit | bool_lit | postfix | "(" ws __check_expr ws ")"
+
+# a name, then any number of ".member" or "(argument)" steps
+postfix       ::= __lex_name trailer*
+trailer       ::= "." __lex_member | "(" ws __check_expr ws ")"
+
+num_lit       ::= [0-9] [0-9]*
+str_lit       ::= "\"" [a-zA-Z0-9 _.,!?-]* "\""
+bool_lit      ::= "true" | "false"
+
+# A name being DECLARED is unconstrained, so it is an ordinary rule.
+ident         ::= [a-zA-Z_] [a-zA-Z0-9_]*
+
+# A name being USED comes from the symbol table.
+#
+# These must NOT delegate to a shared rule such as ident_rest. The matcher vetoes a
+# byte only when the state sits inside a __lex_ rule, so borrowing ident_rest would
+# put the tail of every name inside an ordinary rule where nothing is vetoed -- and
+# `coun` followed by anything would be accepted. Spelling the character class out
+# keeps every byte of the name inside the lexicon rule.
+__lex_name    ::= [a-zA-Z_] [a-zA-Z0-9_]*
+__lex_member  ::= [a-zA-Z_] [a-zA-Z0-9_]*
+
+sp            ::= [ \t\n]+
+ws            ::= [ \t\n]*
