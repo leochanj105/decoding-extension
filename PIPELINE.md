@@ -1,143 +1,210 @@
 # The pipeline, and exactly what we add to XGrammar
 
-No handwaving. Three parts: the grammar, what runs when, and the complete list of
-changes to XGrammar with nothing omitted.
+No handwaving. What the three files are, what runs when, every change made to
+XGrammar, and the audit of XGrammar's own shortcuts against what we depend on.
 
-## Part 1 — the grammar
+## Part 1 — three files, three jobs
 
-`maskgen/fragment.ebnf`. **No type is named anywhere in it.** One rule per
-construct, never one per type — that is the whole reason the extension exists.
+Everything used to live in one place: the type system was encoded in grammar rule
+names (`__bind_type`, `__lex_name`, `__check_expr`), read in three different parts
+of the code. Every new construct needed another naming convention, and the type
+rules could not be tested without generating text and inspecting masks. Now:
 
-Five rule-name prefixes are read by the matcher rather than only by the parser:
+| file | job | tested by |
+|---|---|---|
+| `maskgen/fragment.ebnf` | what text is well formed. **No type is named in it** | plain parsing |
+| `maskgen/fragment.types` | what each rule does to the types, one line per rule | `test_type_table.cc`, 44 checks, no parser involved |
+| `maskgen/cpp/type_table_bind.h` | the only file that knows about both | refuses to build when they disagree |
 
-| prefix | meaning |
-|---|---|
-| `__bind_<x>` | on completing, the text it matched decides the type **required** of what follows |
-| `__have_<x>` | on completing, the text it matched decides the type it **produced** |
-| `__lex_<x>` | its legal content comes from the runtime symbol table, so the grammar only says "an identifier goes here" |
-| `__check_<x>` | it may only finish when the type produced satisfies the type required |
-| `__req_<n>` | a fixed requirement baked into the rule name; superseded by `__bind_`, kept for tests |
+Two values travel with the parser at every position. **REQUIRED** is what this
+position must end up producing, and comes from above: `let x : string =` requires a
+string of everything after it. **PRODUCED** is the type of what has been written
+here so far, and comes from below: after `count` it is number, after
+`count.toFixed` it is string.
 
-A rule carrying one of these **must survive grammar optimisation**, because the
-matcher finds it by name. `RuleInliner` exempts these prefixes. Forgetting that is
-silent: the rule disappears, the matcher never sees it, and the position falls back
-to the compiled mask. It has caught three rules so far.
+Each line of `fragment.types` says what one rule does to those two:
+
+```
+_type_ann       finish=require_text            the annotation sets the requirement
+_expr           enter=fresh   finish=check      a new value, checked when it ends
+_cmp            finish=produce boolean          a comparison, whatever its operands
+_cmp_operand    enter=require_none              the operands are free of it
+_name           finish=produce_text  content=lexicon
+_trailer        finish=replace                  each step retypes what precedes it
+_call_step      finish=replace  gate=environment
+```
+
+`enter=` is one of inherit / fresh / require_none / require &lt;tag&gt;. `finish=` is one
+of pass / keep_first / replace / produce &lt;tag&gt; / produce_text / require_text /
+check. A rule with no line behaves as `enter=inherit finish=keep_first`, which is
+right for an ordinary syntactic rule: pass the requirement down, adopt the first
+type produced beneath it.
+
+A tag such as `boolean` is a name the **environment** resolves. The grammar names
+constructs and the table names tags; neither contains a type.
+
+### The one convention left in the grammar
+
+A rule name beginning with `_` means **something outside this file names this rule**.
+Nothing more. Optimisation folds short rules into their users and deletes them,
+which is silent: the rule vanishes, its line in `fragment.types` applies to nothing,
+and the position quietly behaves as if it had no types attached. That caught three
+rules during development. The fifteen underscored rules and the fifteen table lines
+are checked against each other.
 
 ## Part 2 — what runs when
 
 ### Once, before the model starts
 
-1. **Build the type table.** Close the type graph over the member tables, giving for
-   each pair `(have, need)` whether `have` can still become `need`, and which
-   continuation starts that path. Measured: 125 types, 750 edges, 19 distinct
-   first-step answers over 15,625 pairs. Python, offline.
-2. **Compile the grammar.** XGrammar turns the EBNF into automata and, for every
-   grammar position, a three-way split of the vocabulary: accepted, rejected,
-   uncertain. Measured 21 ms, 0.83 MB.
-3. **Hand the matcher its tables** — `SetTypeResolver`, `SetTypeAcceptor`,
-   `SetLexiconReachableTags`.
+1. **Close the type graph** over the member tables: for each pair `(produced,
+   required)`, whether the first can still become the second. 125 types, 750 edges,
+   7 KB as bitsets, 18 ms of Python. Offline, and independent of any program.
+2. **Compile the grammar.** XGrammar builds automata and, for each grammar position,
+   a three-way split of the vocabulary: accepted, rejected, uncertain. 21 ms.
+3. **Read `fragment.types`, turn it into one record per rule, install it**
+   (`SetRuleTypeTransitions`), along with the resolver, the acceptor, the name-group
+   resolver and the gate predicate.
 
 ### Whenever a declaration lands
 
-4. **`SetLexiconNames(type, names)`** for the one affected type. Nothing else is
-   touched: no recompilation, no closure update. Measured: the per-type name list is
-   a median of 4 tokens, at most 19.
+4. `SetLexiconNames(tag, names)` for the one affected type. No recompilation, no
+   closure update. Per-type name lists are a median of 4 tokens, at most 19.
+   **Not yet wired to the grammar's own declarations — see Part 5.**
 
 ### Every decoding step
 
-5. **XGrammar walks the live parser states** and unions their masks: accepted tokens
-   straight from the compiled table, uncertain ones decided by feeding their bytes
-   into the parser.
-6. **During that walk, our checks fire per byte:**
-   - inside a `__lex_` rule, a byte is vetoed unless the text so far still matches
-     the start of some declared name of a usable type
-   - a `__lex_` rule may only finish where the text is exactly a declared name
-   - a `__check_` rule may only finish when the produced type satisfies the required
-     type
-7. **On each rule completion, our hook may bind a type** from the text that rule
-   matched — the required type for what follows, or the type just produced.
-
-Step 5 is XGrammar's, unchanged. Steps 6 and 7 are ours.
+5. **XGrammar walks the live parser positions and unions their masks**: accepted
+   tokens straight from the compiled table, uncertain ones decided by feeding their
+   bytes through the parser. This is XGrammar's, unchanged.
+6. **Our checks fire during that walk:**
+   - entering a rule, its `enter=` action sets the two values
+   - inside a `content=lexicon` rule, a byte is refused unless the text so far still
+     begins some usable declared name
+   - such a rule may only finish where the text is exactly a declared name
+   - a `finish=check` rule may only finish when PRODUCED satisfies REQUIRED
+   - a `gate=environment` rule is refused at entry when the environment says so
+   - finishing, a rule's `finish=` action updates the enclosing position
+7. **A rule whose type is fixed is refused at entry** where that type cannot satisfy
+   the requirement. A comparison is a boolean, so it does not begin a string-valued
+   expression. This is what keeps the mask honest: without it the model is offered a
+   first token it could never finish legally.
 
 ## Part 3 — the complete list of changes to XGrammar
 
-Branch `typed-lexicon`. 1,114 lines added across 8 files.
+Branch `typed-lexicon`.
 
-### New file: `cpp/dynamic_lexicon.{h,cc}` (399 lines)
+### New: `include/xgrammar/type_transition.h`
 
-The runtime symbol table. Names grouped by type; which groups a type draws from;
-queries for "does this prefix still match a name", "is this text exactly a name",
-"which tokens start a name here". Start-of-name token lists are cached as sorted
-id lists, not bitsets — the dense version cost 30.6 µs per call to deliver 11
-tokens, the sparse one 0.22 µs.
+The record. Per rule: an enter action, a finish action, a fixed type, a required
+type, whether its content comes from the caller, whether the caller gates it.
+XGrammar never interprets the two values — they are integers it carries and compares
+only through the caller's acceptor, and it does not care whether they mean types.
 
-### `cpp/earley_parser.h/.cc` — the parser
+### New: `cpp/dynamic_lexicon.{h,cc}`
+
+The runtime symbol table. Names grouped by tag; which groups a tag draws from;
+"does this prefix still match a name", "is this text exactly a name", "which tokens
+start a name here". Start-of-name token lists are sorted id lists, not bitsets — the
+dense version cost 30.6 µs to deliver 11 tokens, the sparse one 0.22 µs.
+
+### `cpp/earley_parser.{h,cc}` — the parser
 
 | change | what it is |
 |---|---|
-| two fields on `ParserState` | `need_type`, `have_type`. In the parsing hash and equality, so two readings requiring different types do not merge. **Not** in the mask-cache key, so the compiled cache is not multiplied. |
-| `AtElement`, `KeepingRepeatCount` | a refactor, not a feature: the struct was brace-initialised positionally at 14 sites, and adding a field by hand at each is where a silent corruption would live |
-| four virtual hooks | `OnRuleCompleted`, `MayCompleteRule`, `MayScanByte`, each with a `Has*` guard so a grammar not using them pays nothing |
-| rule-name scan | which rules are `__lex_` or `__req_`, and which rules can reach a `__lex_` rule |
-| `Scan` consults `MayScanByte` | one place; it is the single point at which a byte is offered to a state |
-| `Complete` consults `MayCompleteRule` | at the top, so it applies during mask computation as well as a real advance |
-| completion sites call `OnRuleCompleted` | including the FSM path, where the parent was already advanced at prediction time, so the hook belongs on the re-enqueue |
-| the prediction site sets `need_type` | from the predicted rule, inherited inside it, exactly as the token and character budgets already are |
+| two fields on `ParserState` | `need_type`, `have_type`. In the parsing comparison, so two readings needing different types do not merge. Not in the mask-cache key — see Part 4. |
+| `AtElement`, `KeepingRepeatCount` | a refactor: the struct was brace-initialised positionally at 14 sites, and adding a field by hand at each is where a silent corruption would live |
+| five virtual hooks | `OnRuleEntered`, `OnRuleCompleted`, `MayScanByte`, `MayCompleteRule`, `MayPredictRule`, each with a `Has*` guard so a grammar not using them pays nothing |
+| `RuleNeedsCompletionEvent` | beside the existing `RuleNeedsCaptureEvent`, and for the same reason |
+| `RuleContentIsExternal` | static, because compilation needs it before any caller records exist |
+| removed | the `__req_<n>` name parsing, the set of rules that reset a value, `NeedTypeForRule`. All of it is now the caller's record. |
 
 ### `cpp/grammar_matcher.cc` — the matcher
 
-Owns a `DynamicLexicon`, overrides the four hooks, and adds four public methods.
-Also: byte tracking is enabled when a lexicon rule is present, and each byte is
-pushed into the speculative buffer **before** advancing, so a check running during
-the advance can see it. That ordering was wrong twice.
+Holds the records and the symbol table, and implements every hook from them: one
+switch for entering, one for finishing, and the three refusals. Byte tracking is on
+whenever a rule reads its own text, and each byte enters the speculative buffer
+**before** the step that examines it — that ordering was wrong three times, once per
+code path. Also: the resolver is told the carried values, not just the text, so a
+member name resolves against its receiver.
 
 ### `cpp/grammar_compiler.cc` — the compiler
 
 | change | why |
 |---|---|
-| a `__lex_` rule's mask becomes all-uncertain | its compiled answer is wrong by construction: the grammar accepts every identifier-shaped token while the legal names appear only at runtime |
-| a token whose walk enters a `__lex_` rule becomes uncertain | accepted tokens are unioned in wholesale and never walked, so they would escape every check. This was a real bug: 41,556 tokens offered where 10 were legal |
-| the accept-without-walking shortcut is off for `__lex_` rules | it accepts a token without ever walking it |
+| an external-content rule's mask becomes all-uncertain | its compiled answer is wrong by construction: the grammar accepts every identifier-shaped token while the legal names appear only at generation time |
+| a token whose walk enters such a rule becomes uncertain | accepted tokens are unioned in wholesale and never walked, so they escape every check. A real bug: 41,556 tokens offered where 10 were legal |
 
 ### `cpp/grammar_functor.cc` — the optimiser
 
-Marker-prefixed rules are exempt from inlining, alongside the budgeted, capture,
-lazy and temperature rules already exempt for the same reason.
+A rule named from outside the grammar is exempt from inlining, alongside the
+budgeted, capture, lazy and temperature rules already exempt for the same reason.
 
 ### `include/xgrammar/matcher.h` — the public surface
 
 ```cpp
+void SetRuleTypeTransitions(std::vector<RuleTypeTransition> transitions);
 void SetLexiconNames(int32_t tag, std::vector<std::string> names);
 void SetLexiconReachableTags(int32_t tag, std::vector<int32_t> source_tags);
-void SetTypeResolver(std::function<int32_t(int32_t rule_id, std::string_view matched)>);
-void SetTypeAcceptor(std::function<bool(int32_t need_type, int32_t have_type)>);
+void SetTypeResolver(...);        // text + carried values -> a type
+void SetTypeAcceptor(...);        // does produced satisfy required
+void SetLexiconTagResolver(...);  // which name group this position draws from
+void SetStepPredicate(...);       // may this gated rule be entered
+int32_t GetRuleId(const std::string& name) const;
 ```
 
-Four methods. XGrammar never interprets a type id; the caller holds the type table.
+## Part 4 — XGrammar's shortcuts, audited against what we need
 
-## Part 4 — what this costs
+XGrammar is free to discard anything that does not affect *"is this byte legal
+here"*. We need two further things: **where a rule started** (to recover the text it
+has matched) and **that its completion happens** (to apply its finish action). Every
+shortcut was checked against both. Three were already broken and fixed; two were
+latent and are now guarded.
 
-Measured at the worst position of the fragment grammar:
+| shortcut | verdict |
+|---|---|
+| folding a short rule into its user and deleting it | **broke us.** The rule's table line applied to nothing, silently. Fixed: a rule named from outside the grammar is not folded. Caught three rules. |
+| skipping a parent's completion when the child is in tail position | **broke us.** `_cmp`'s "produce boolean" never ran, so `a == b` was typed as `a`. Fixed: `RuleNeedsCompletionEvent`, beside the identical guard captures already had. |
+| swallowing a whole token in one step | **broke us.** One parser position for the whole token, so a rule starting mid-token had nothing to measure from: the name in `␠count` read as `␠count` and matched nothing. Fixed: grammars that read their text go byte by byte. Costs nothing — that pass already ran on every token. |
+| jump-forward: emitting bytes the grammar forces, without asking the model | **latent.** It decides from the grammar's character edges alone and never consults our veto, so a grammar whose identifier rule narrowed to one letter would emit a byte nobody allowed. Cannot fire on this grammar — an identifier rule always permits many letters, so nothing is forced. Guarded: no jumping inside a rule whose content comes from the caller. |
+| stepping over a rule that can match the empty string | **latent.** The rule is never entered or completed, so its action does not run. Correct for five of the seven actions — a rule that matched nothing produced nothing, which is exactly why `_trailer*` leaves the receiver's type alone. Wrong for two: `produce` would have produced regardless of text, and `check` is a refusal that simply would not happen. Guarded: such a line on such a rule now fails loudly at install time. |
+| the mask cache ignoring the two values | **safe, for a reason.** The cache maps a syntactic position to its continuations. The types decide *which positions exist* rather than what follows one: a `;` is only reachable if the expression was permitted to finish, and that permission is the check. |
+| state de-duplication | **safe.** Both values are in the parsing comparison, so two readings differing only by type are not merged. |
+| rollback | **safe.** It truncates the byte history by exactly the number of positions the byte path created, and we always take that path. |
+| subtree pruning during mask generation | **safe.** One rejected prefix eliminates a whole alphabetical block, and our refusal is itself a prefix test: if no name begins `couz`, none begins `couza`. |
+
+## Part 5 — measurements, and what is not done
+
+Measured on the fragment, with three names and six types in scope:
 
 ```
-with our type machinery      61.1 us
-every marker renamed away    56.0 us     <- plain XGrammar, same grammar
-overhead                          ~9%
+mask where a name is being written     125 us
+mask at the start of an expression     189 us    (402 tokens offered)
+mask at a member position               85 us    (10 or 11 tokens offered)
+mask on a plain grammar, for scale       0.6 us
 ```
 
-A model step is about 33,000 µs, so the whole mechanism is well under 1% of
-generation.
+A model step is about 33,000 µs, so even the worst of these is well under 1% of
+generation. The overhead figure against plain XGrammar on an identical grammar
+(previously 61.1 µs against 56.0 µs, about 9%) was measured on the superseded
+design and **needs re-measuring**.
 
-## Part 5 — what is NOT done
+Tests: 44 checks on the table with no parser involved, 25 end-to-end checks driving
+the real grammar with real vocabulary tokens — a six-statement program accepted 51
+tokens out of 51, ten ill-typed programs each blocked at a named position, eight
+well-typed ones accepted. Seven test files, all passing.
 
-1. **A produced type does not propagate up through ordinary rules.** It is set on the
-   completing rule's immediate parent only. The chain
-   `__check_expr -> eq -> sum -> primary -> postfix -> __lex_name` therefore loses it,
-   so `__check_expr` is asked to finish with no produced type and refuses. **A
-   complete statement does not parse**: the final `;` of `let x : string = msg;` is
-   rejected. This is the blocking bug.
-2. **Member names are not wired.** `__lex_member` is looked up under the required
-   type rather than the receiver's, so `count.toString()` cannot be written.
-3. **Whitespace is fixed, and should not be.** Flexible formatting costs about 5% of
-   generation time, which is affordable; the fixed-layout restriction was an
-   overreaction to one slow position and should be reverted.
+Not done:
+
+1. **Declarations do not extend the symbol table.** The model can write
+   `let x : number = 3;` and then cannot use `x`, because nothing records that it
+   now exists. The usable names are only those seeded in advance. This is the
+   feature the whole mechanism exists for.
+2. **No test that the two input paths agree.** XGrammar can be fed a program
+   character by character or token by token, and a model only ever does the second.
+   Every test used the first and passed while the second was entirely broken. The
+   fix for the category is a test that does both and demands identical masks at
+   every step — then the next shortcut that behaves differently for tokens fails the
+   day it lands, rather than weeks later.
+3. **An operator's result type is not derived from its operands.** `_sum` keeps the
+   first operand's type, so `3 + "x"` is typed as a number where TypeScript makes it
+   a string. The table line is where that would be fixed.
