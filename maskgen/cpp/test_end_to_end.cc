@@ -298,6 +298,16 @@ int main(int, char** argv) {
       {"let a : string = count.valueOf ;\n", "valueOf gives a number, not a string"},
       {"let a : number = count(total) ;\n", "count is not callable"},
       {"let a : number = count.nosuch ;\n", "number has no member called nosuch"},
+      {"msg = count ;\n", "msg is a string, so assigning a number must be refused"},
+      {"count = msg ;\n", "count is a number, so assigning a string must be refused"},
+      {"let a : number = ( msg ) ;\n", "a parenthesised string is still not a number"},
+      {"let a : string = ( count ) ;\n", "nor the other way round"},
+      {"let a : string = msg.split.length ;\n", "a chain ends at number, not string"},
+      {"let a:string=count;", "the same holds with no whitespace at all"},
+      // No name in this environment is a boolean[] and no member returns one, so the
+      // annotation is legal but nothing can follow it. The refusal lands on the first
+      // name, not at the end: there is no point letting the model start.
+      {"let a : boolean[] = msg ;\n", "nothing here can produce a boolean[] at all"},
   };
   for (const auto& [text, why] : ill_typed) {
     auto ill = Tokenize(text, by_text);
@@ -323,6 +333,22 @@ int main(int, char** argv) {
       "let a : boolean = count == total ;\n",
       "let a : string = msg.toUpperCase ;\n",
       "let a : number = count.valueOf ;\n",
+      // The second statement form: the target's own declared type is the requirement.
+      "msg = msg.toUpperCase ;\n",
+      "msg = count.toString ;\n",
+      "count = msg.length ;\n",
+      // Parentheses, the only place enter=fresh applies.
+      "let a : number = ( count ) ;\n",
+      "let a : string = ( msg.toUpperCase ) ;\n",
+      "let a : number = ( count ) + count ;\n",
+      // The third statement form. It declares a function, which this environment has
+      // no type for, so it only has to parse.
+      "declare function f ( a : number ) : string ;\n",
+      // Chained members: each step retypes the whole expression again.
+      "let a : number = msg.split.length ;\n",
+      "let a : string = msg.split.join ;\n",
+      // No whitespace anywhere, and two statements on one line.
+      "let a:number=count;msg=count.toString;",
   };
   for (const auto& text : well_typed) {
     auto ok = Tokenize(text, by_text);

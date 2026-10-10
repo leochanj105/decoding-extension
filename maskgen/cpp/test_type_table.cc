@@ -135,6 +135,14 @@ int main(int, char**) {
           "having produced nothing cannot satisfy a requirement either");
   }
 
+  // Having passed its check, an expression still reports what it produced -- which
+  // is how a parenthesised expression satisfies the position it sits in.
+  {
+    const Types after =
+        table.OnFinish("_expr", Types{NUMBER, NUMBER}, Types{NUMBER, -1}, "", oracle);
+    check(after.produced == NUMBER, "a checked expression carries its type outward");
+  }
+
   // A name produces the type it was declared with.
   {
     const Types after = table.OnFinish("_name", Types{}, Types{NUMBER, -1}, "msg", oracle);

@@ -37,7 +37,10 @@
 #                  which is how a name gets the type it was declared with
 #   require_text   set REQUIRED from the text matched, which is how a `: string`
 #                  annotation constrains what follows it
-#   check          refuse to finish unless PRODUCED satisfies REQUIRED
+#   check          refuse to finish unless PRODUCED satisfies REQUIRED. Having
+#                  passed, it carries PRODUCED out like keep_first: a check is a
+#                  refusal, not a transformation, and `( count )` has to be able to
+#                  tell the expression around it that it is a number
 #
 # content=lexicon  the legal text here is not in the grammar: it comes from the
 #                  symbol table, and a byte is refused as soon as no name in scope

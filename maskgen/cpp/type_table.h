@@ -46,7 +46,8 @@ enum class Finish {
   kProduce,      // produce a fixed type, named by a tag the environment resolves
   kProduceText,  // produce the type the environment gives for the matched text
   kRequireText,  // require the type the environment gives for the matched text
-  kCheck,        // refuse to finish unless what was produced satisfies the requirement
+  kCheck,        // refuse to finish unless what was produced satisfies the
+                 // requirement; having passed, behaves as kKeepFirst
 };
 
 /*! \brief One row of the table. */
@@ -154,8 +155,11 @@ class TypeTable {
     Types out = enclosing;
     switch (row.finish) {
       case Finish::kPass:
-      case Finish::kCheck:
         break;
+      // A check is a refusal, not a transformation: having confirmed it produced the
+      // right thing, the rule still produced it, and the position around it may need
+      // to know. Discarding it meant `( count )` reported producing nothing.
+      case Finish::kCheck:
       case Finish::kKeepFirst:
         if (self.produced >= 0 && out.produced < 0) out.produced = self.produced;
         break;
