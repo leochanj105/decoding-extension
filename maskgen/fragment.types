@@ -100,4 +100,11 @@ _member_name    finish=produce_text  content=lexicon
 _postfix        finish=replace
 _trailer        finish=replace
 _member_step    finish=replace       gate=environment
+# A call replaces the function with what calling it gives. The application itself
+# happens one level down, when the argument finishes -- or, with no argument, when
+# the empty form does, since nothing else inside it ever completes.
 _call_step      finish=replace       gate=environment
+# enter_have=none matters here: without it the empty call inherits the function as
+# its own produced value, and applying the function to itself is not what `()` means.
+_call_none      enter_have=none      finish=combine apply
+_arg            enter_need=none  enter_have=none   finish=combine apply

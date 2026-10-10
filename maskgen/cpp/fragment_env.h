@@ -53,16 +53,53 @@ inline const char* const kTypeNames[] = {
     "number", "string", "boolean", "number[]", "string[]", "boolean[]"};
 inline int32_t MemberTag(int32_t recv, int32_t need) { return 100 + recv * T_NGROUPS + need; }
 
+/*!
+ * \brief Function types, as tags.
+ *
+ * A method is a function, and a member access hands you that function rather than
+ * what calling it gives: `msg.split` is "takes a string, gives a string[]", and only
+ * `msg.split("x")` is a string[]. Modelling it the other way round -- which this
+ * fragment did until calls were implemented -- accepts TypeScript that does not type
+ * check, and leaves the call machinery doing no work at all.
+ *
+ * kNothing is the parameter of a function that takes none, so `()` has a parameter
+ * type to match against like any other call.
+ */
+enum { kNothing = T_NGROUPS, kParamKinds = T_NGROUPS + 1 };
+inline int32_t FnTag(int32_t param, int32_t result) { return 200 + param * kParamKinds + result; }
+inline bool IsCallable(int32_t t) { return t >= 200; }
+inline int32_t ParamOf(int32_t fn) { return IsCallable(fn) ? (fn - 200) / kParamKinds : -1; }
+inline int32_t ResultOf(int32_t fn) { return IsCallable(fn) ? (fn - 200) % kParamKinds : -1; }
+
+/*! \brief The array type whose elements are `element`, or -1 if there is none. */
+inline int32_t ArrayOf(int32_t element) {
+  switch (element) {
+    case T_NUM: return T_NUMA;
+    case T_STR: return T_STRA;
+    case T_BOOL: return T_BOOLA;
+    default: return -1;      // no arrays of arrays in the six
+  }
+}
+
+
 struct Environment {
   std::map<std::string, int32_t> symbols{
       {"count", T_NUM}, {"total", T_NUM}, {"msg", T_STR}};
+  // A property holds a plain type; a method holds a function type, which has to be
+  // called to get anything else. `length` is a property, `split` is a method.
   std::map<int32_t, std::map<std::string, int32_t>> members{
-      {T_NUM, {{"toString", T_STR}, {"toFixed", T_STR}, {"valueOf", T_NUM}}},
-      {T_STR, {{"length", T_NUM}, {"toUpperCase", T_STR}, {"split", T_STRA}}},
-      {T_BOOL, {{"toString", T_STR}}},
-      {T_NUMA, {{"length", T_NUM}, {"join", T_STR}}},
-      {T_STRA, {{"length", T_NUM}, {"join", T_STR}}},
-      {T_BOOLA, {{"length", T_NUM}, {"join", T_STR}}}};
+      {T_NUM,
+       {{"toString", FnTag(kNothing, T_STR)},
+        {"toFixed", FnTag(T_NUM, T_STR)},
+        {"valueOf", FnTag(kNothing, T_NUM)}}},
+      {T_STR,
+       {{"length", T_NUM},
+        {"toUpperCase", FnTag(kNothing, T_STR)},
+        {"split", FnTag(T_STR, T_STRA)}}},
+      {T_BOOL, {{"toString", FnTag(kNothing, T_STR)}}},
+      {T_NUMA, {{"length", T_NUM}, {"join", FnTag(T_STR, T_STR)}}},
+      {T_STRA, {{"length", T_NUM}, {"join", FnTag(T_STR, T_STR)}}},
+      {T_BOOLA, {{"length", T_NUM}, {"join", FnTag(T_STR, T_STR)}}}};
   // Which source types can reach each target, i.e. the transitive closure of the
   // member edges above. A name is admitted at a position if its type reaches what
   // the position requires, since a member access may still get there.
@@ -82,7 +119,15 @@ struct Environment {
     return it == group->second.end() ? -1 : it->second;
   }
 
+  /*!
+   * \brief Whether a value of type `from` can still become one of type `to`.
+   *
+   * A function reaches whatever calling it reaches, which is what lets `.split` be
+   * offered at a string[] position even though `.split` itself is a function.
+   */
   bool reachable(int32_t from, int32_t to) const {
+    if (from == to) return true;
+    if (IsCallable(from)) return reachable(ResultOf(from), to);
     auto it = reaches.find(to);
     if (it == reaches.end()) return false;
     for (int32_t s : it->second) if (s == from) return true;
@@ -90,15 +135,7 @@ struct Environment {
   }
 };
 
-/*! \brief The array type whose elements are `element`, or -1 if there is none. */
-inline int32_t ArrayOf(int32_t element) {
-  switch (element) {
-    case T_NUM: return T_NUMA;
-    case T_STR: return T_STRA;
-    case T_BOOL: return T_BOOLA;
-    default: return -1;      // no arrays of arrays in the six
-  }
-}
+
 
 /*!
  * \brief What an operator does to two types.
@@ -119,6 +156,12 @@ inline int32_t Combine(int32_t op, int32_t accumulated, int32_t operand) {
       const int32_t as_array = ArrayOf(operand);
       if (accumulated < 0) return as_array;
       return accumulated == as_array ? accumulated : -1;
+    }
+    case 2: {  // calling: `accumulated` is the function, `operand` the argument
+      if (!IsCallable(accumulated)) return -1;
+      const int32_t wanted = ParamOf(accumulated);
+      const int32_t given = operand < 0 ? kNothing : operand;
+      return wanted == given ? ResultOf(accumulated) : -1;
     }
     default: return -1;
   }
@@ -146,6 +189,7 @@ inline TypeOracle OracleFor(const Environment& env) {
   oracle.resolve_op = [](std::string_view name) -> int32_t {
     if (name == "plus") return 0;
     if (name == "array") return 1;
+    if (name == "apply") return 2;
     return -1;
   };
   // TypeScript's `+`: a number only when both operands are numbers, a string as soon
@@ -217,8 +261,10 @@ inline void Install(
   );
   // Nothing in this environment is callable, and a member needs a receiver.
   m.SetStepPredicate([rules](int32_t rule, int32_t need, int32_t have) {
-    if (rule == rules.call_step) return false;
-    if (rule == rules.member_step) return have >= 0;
+    // A call is only worth starting on something callable, which is what makes
+    // `count(...)` refused and `msg.split(...)` allowed.
+    if (rule == rules.call_step) return IsCallable(have);
+    if (rule == rules.member_step) return have >= 0 && !IsCallable(have);
     // An array literal is only worth starting where an array is wanted. With no
     // requirement it is allowed, since anything could be.
     if (rule == rules.arr_lit) {

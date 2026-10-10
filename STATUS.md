@@ -27,10 +27,16 @@ x = e ;                                               the target's declared type
 declare function f ( a : number ) : string ;          a signature, no body
 ```
 
-Expressions: names drawn from the symbol table, member access and chains of it
-(`msg.split.length`), calls, number / string / boolean / array literals, `+` typed
-from both operands, `==`, and parentheses. Whitespace is free everywhere, newlines
-included.
+Expressions: names drawn from the symbol table, member access, calls with and
+without an argument, chains of both (`msg.split(msg).length`), number / string /
+boolean / array literals, `+` typed from both operands, `==`, and parentheses.
+Whitespace is free everywhere except inside a postfix chain, where it is not allowed.
+
+**A member access hands back the member, and a method is a function.** `msg.split` is
+"takes a string, gives a string[]"; only `msg.split(msg)` is a string[]. A property is
+not a function: `msg.length` is a number on its own. Modelling it the other way round
+-- which this fragment did until calls were implemented -- accepts TypeScript that
+does not type check, and leaves the call machinery doing no work at all.
 
 Three files, with one job each:
 
@@ -67,6 +73,12 @@ let a : boolean  = count == total ;     accepted   a comparison is a boolean
 let a : number   = count == total ;     refused    ...not its operands' type
 let a : number   = ( count ) ;          accepted   a checked expression keeps its type
 let a : boolean[] = msg ;               refused    at the FIRST NAME, not the semicolon
+let a : string   = msg.toUpperCase() ;  accepted   a method is a function; () applies it
+let a : string   = msg.toUpperCase ;    refused    the function itself is not a string
+let a : string[] = msg.split() ;        refused    split takes a string, not nothing
+let a : number   = msg.length() ;       refused    length is a property, not a method
+let a : number   = count() ;            refused    a number is not callable
+let a : number   = msg.split(msg).length ;  accepted   string -> function -> string[] -> number
 ```
 
 That last one is the shape of the whole thing: nothing in the environment can produce
@@ -120,10 +132,13 @@ Small, and listed first because they are cheapest:
 
 | | |
 |---|---|
-| **zero-argument calls** | `_call_step ::= "(" _expr ")"` requires exactly one argument, so `msg.toUpperCase()` cannot be written — the fragment treats `.toUpperCase` as the value. Unusual TypeScript. |
+| **empty array literals** | `[]` has no element to take a type from, so it needs the requirement handed down from its position. Same missing piece as the next row. |
+| **an argument's required type** | the argument of `f(x)` carries no requirement of its own, so a wrongly-typed argument is refused when the argument *ends* rather than at its first token. Correct, just later than it could be. Fixing it needs a requirement computed from context — the thing that was wanted from the start. |
+
+| | |
+|---|---|
 | **member access on an expression** | only a *name* takes `.member` or `(args)`. `[1, 2].length`, `"abc".length` and `( e ).member` are not writable, where PLDI allows a member access on any expression. |
-| **calls, in practice** | The gate is implemented and refuses correctly, but nothing in the environment is callable, so the half of the type graph that comes from *calling* a function has never run in the positive direction. Member edges carry everything today. |
-| **declarations registering names** | `let x : number = 3 ;` then `x` on the next line: `x` is not offered. Names are seeded in advance. This is the feature the mechanism was built for. |
+| **declarations registering names** | `let x : number = 3 ;` then `x` on the next line: `x` is not offered. Names are seeded in advance. This is the feature the mechanism was built for, and the only one of the four originally listed that is still untouched. |
 
 ### Gap that is only more data
 

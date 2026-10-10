@@ -14,8 +14,10 @@
 //
 //   count, total : number        msg : string
 //
-// No type in this environment is callable, so a call step is always refused and
-// a member is written without one: `count.toString` and not `count.toString()`.
+// A member access hands back the member, and a method is a FUNCTION: `msg.split` is
+// "takes a string, gives a string[]", so only `msg.split("x")` is a string[]. A
+// property is not a function: `msg.length` is a number on its own. That is why some
+// of these have parentheses and some do not.
 #include <xgrammar/xgrammar.h>
 #include <dlpack/dlpack.h>
 
@@ -87,9 +89,11 @@ int main(int, char** argv) {
       "let a : string = msg ;\n"
       "let b : number = msg.length ;\n"
       "let c : boolean = count == total ;\n"
-      "let d : string = count.toString ;\n"
+      "let d : string = count.toString() ;\n"
       "let e : number = 3 + count ;\n"
-      "let f : string[] = msg.split ;\n";
+      "let f : string[] = msg.split(msg) ;\n"
+      "let g : string = msg.split(msg).join(msg) ;\n"
+      "let h : number[] = [ 1 , 2 , 3 ] ;\n";
 
   auto tokens = Tokenize(program, by_text);
   check(!tokens.empty(), "the program cuts into vocabulary tokens");
@@ -128,22 +132,24 @@ int main(int, char** argv) {
       {"let a : string = 3 ;\n", "a numeric literal is not a string"},
       {"let a : number = true ;\n", "a boolean literal is not a number"},
       {"let a : number = count == total ;\n", "a comparison is a boolean, not a number"},
-      {"let a : number = msg.toUpperCase ;\n", "toUpperCase gives a string, not a number"},
-      {"let a : string = count.valueOf ;\n", "valueOf gives a number, not a string"},
-      {"let a : number = count(total) ;\n", "count is not callable"},
+      {"let a : string = count.valueOf() ;\n", "valueOf gives a number, not a string"},
+      {"let a : number = count() ;\n", "count is not a function, so it cannot be called"},
       {"let a : number = count.nosuch ;\n", "number has no member called nosuch"},
+      {"let a : string = msg.toUpperCase ;\n",
+       "the method itself is a function, not the string it would return"},
+      {"let a : string = msg.toUpperCase(msg) ;\n",
+       "toUpperCase takes nothing, so an argument must be refused"},
+      {"let a : string[] = msg.split() ;\n",
+       "split takes a string, so no argument must be refused"},
+      {"let a : string[] = msg.split(3) ;\n", "split takes a string, not a number"},
+      {"let a : number = msg.length() ;\n", "length is a property, so it cannot be called"},
       {"msg = count ;\n", "msg is a string, so assigning a number must be refused"},
       {"count = msg ;\n", "count is a number, so assigning a string must be refused"},
       {"let a : number = ( msg ) ;\n", "a parenthesised string is still not a number"},
       {"let a : string = ( count ) ;\n", "nor the other way round"},
-      {"let a : string = msg.split.length ;\n", "a chain ends at number, not string"},
       {"let a:string=count;", "the same holds with no whitespace at all"},
-      // No name in this environment is a boolean[] and no member returns one, so the
-      // annotation is legal but nothing can follow it. The refusal lands on the first
-      // name, not at the end: there is no point letting the model start.
       {"let a : boolean[] = msg ;\n", "nothing here can produce a boolean[] at all"},
       {"let a : number = 3 + msg ;\n", "a number plus a string is a string, not a number"},
-      {"let a : number = msg + msg ;\n", "two strings make a string"},
       {"let a : number = [ 1 ] ;\n", "an array literal is not a number"},
       {"let a : number[] = [ msg ] ;\n", "an array of strings is not an array of numbers"},
       {"let a : number[] = [ 1 , msg ] ;\n", "a mixed array has no type at all"},
@@ -167,39 +173,39 @@ int main(int, char** argv) {
   const std::vector<std::string> well_typed = {
       "let a : number = count ;\n",
       "let a : string = msg ;\n",
-      "let a : string[] = msg.split ;\n",
+      "let a : number = msg.length ;\n",
       "let a : number = 3 ;\n",
       "let a : boolean = true ;\n",
       "let a : boolean = count == total ;\n",
-      "let a : string = msg.toUpperCase ;\n",
-      "let a : number = count.valueOf ;\n",
-      // The second statement form: the target's own declared type is the requirement.
-      "msg = msg.toUpperCase ;\n",
-      "msg = count.toString ;\n",
+      // Calls. A method is a function; calling it is what changes the type.
+      "let a : string = msg.toUpperCase() ;\n",
+      "let a : number = count.valueOf() ;\n",
+      "let a : string = count.toString() ;\n",
+      "let a : string = count.toFixed(count) ;\n",
+      "let a : string[] = msg.split(msg) ;\n",
+      // A chain: string -> (string -> string[]) -> string[] -> number
+      "let a : number = msg.split(msg).length ;\n",
+      "let a : string = msg.split(msg).join(msg) ;\n",
+      // Assignment, where the requirement comes from the target's declared type.
+      "msg = msg.toUpperCase() ;\n",
+      "msg = count.toString() ;\n",
       "count = msg.length ;\n",
-      // Parentheses, the only place enter=fresh applies.
+      // Parentheses, the only place enter_have=none applies outside an argument.
       "let a : number = ( count ) ;\n",
-      "let a : string = ( msg.toUpperCase ) ;\n",
+      "let a : string = ( msg.toUpperCase() ) ;\n",
       "let a : number = ( count ) + count ;\n",
-      // The third statement form. It declares a function, which this environment has
-      // no type for, so it only has to parse.
       "declare function f ( a : number ) : string ;\n",
-      // Chained members: each step retypes the whole expression again.
-      "let a : number = msg.split.length ;\n",
-      "let a : string = msg.split.join ;\n",
-      // No whitespace anywhere, and two statements on one line.
-      "let a:number=count;msg=count.toString;",
-      // `+` typed from both operands, which is TypeScript's rule.
-      "let a : string = msg + msg ;\n",
-      "let a : number = count + count ;\n",
-      "let a : string = msg + 3 ;\n",
-      "let a : string = 3 + msg ;\n",
+      "let a:number=count;msg=count.toString() ;",
       // Array literals, typed by folding their elements together.
       "let a : number[] = [ 1 ] ;\n",
       "let a : number[] = [ 1 , 2 , 3 ] ;\n",
       "let a : string[] = [ msg , msg ] ;\n",
       "let a : boolean[] = [ true , false ] ;\n",
       "let a : number[] = [ count , 3 ] ;\n",
+      "let a : string = msg + 3 ;\n",
+      "let a : string = 3 + msg ;\n",
+      "let a : number = count + count ;\n",
+      "let a : string = msg + msg ;\n",
   };
   for (const auto& text : well_typed) {
     auto ok = Tokenize(text, by_text);

@@ -65,7 +65,11 @@ _num_lit       ::= [0-9] [0-9]*
 _str_lit       ::= "\"" [a-zA-Z0-9 _.,!?-]* "\""
 _bool_lit      ::= "true" | "false"
 
-# A NAME, then any number of ".member" or "(argument)" steps. Only a name takes
+# A NAME, then any number of ".member" or "(argument)" steps, with NO whitespace
+# inside the chain: `msg.split(msg)`, never `msg . split ( msg )`. Allowing it would
+# put whitespace and a member name at the same position, which is the pattern that
+# costs a factor of a thousand -- see the note on whitespace at the end of this file.
+# Only a name takes
 # them: `[1, 2].length`, `"abc".length` and `( e ).member` are not writable, where
 # PLDI allows a member access on any expression. Recorded in STATUS.md.
 _postfix       ::= _name _trailer*
@@ -73,7 +77,13 @@ _trailer       ::= _member_step | _call_step
 _member_step   ::= "." _member_name
 # A call is grammatical on any name. Whether the thing is callable is not a
 # syntactic question, so the runtime refuses this step rather than the grammar.
-_call_step     ::= "(" [ \t\n]* _expr [ \t\n]* ")"
+#
+# The two forms are separate rules because they apply the function differently: with
+# an argument, the argument's own type is what gets applied; with none, there is
+# nothing to complete inside the call, so the empty form has to do it itself.
+_call_step     ::= _call_none | "(" [ \t\n]* _arg [ \t\n]* ")"
+_call_none     ::= "(" [ \t\n]* ")"
+_arg           ::= eq
 
 # A name being DECLARED is unconstrained, so it is an ordinary rule.
 ident          ::= [a-zA-Z_] [a-zA-Z0-9_]*
