@@ -65,11 +65,17 @@ require whatever the text names, check, or combine two types under an operator.
 
 ### What is verified
 
-99 checks across seven test files, all passing.
+Nine test files, all passing.
 
-- **51 checks on the type table alone**, with no parser, grammar or token involved.
+- **63 checks on the type table alone**, with no parser, grammar or token involved.
   Two integers and a rule name in, two integers out.
-- **48 checks end to end**, driving the real grammar with real vocabulary tokens the
+- **both input paths**, walked side by side over eight programs and 112 positions,
+  with the masks required to be identical at every one. XGrammar accepts bytes or
+  tokens and a decoder only ever sends tokens; four bugs here came from a shortcut
+  behaving differently between the two, and each was found by hand.
+- **a ceiling on the clock**, because a mask a thousand times too slow still answers
+  correctly and passes everything else. That happened, and only a profile caught it.
+- **98 checks end to end**, driving the real grammar with real vocabulary tokens the
   way a decoder does. A seven-statement program is accepted token by token, 63 of 63.
   Twelve ill-typed programs are each refused, at a named position. Sixteen well-typed
   ones are accepted.
