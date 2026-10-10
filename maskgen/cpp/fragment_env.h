@@ -213,6 +213,7 @@ struct RuleIds {
   int32_t call_step = -1;
   int32_t member_step = -1;
   int32_t arr_lit = -1;
+  int32_t arr_empty = -1;
   int32_t decl_name = -1;
 };
 
@@ -358,15 +359,25 @@ inline void Install(
       }
   );
   // Nothing in this environment is callable, and a member needs a receiver.
-  m.SetStepPredicate([rules](int32_t rule, int32_t need, int32_t have) {
+  m.SetStepPredicate([rules, &env](int32_t rule, int32_t need, int32_t have) {
     // A call is only worth starting on something callable, which is what makes
     // `count(...)` refused and `msg.split(...)` allowed.
     if (rule == rules.call_step) return IsCallable(have);
     if (rule == rules.member_step) return have >= 0 && !IsCallable(have);
-    // An array literal is only worth starting where an array is wanted. With no
-    // requirement it is allowed, since anything could be.
+    // An array literal is worth starting wherever some array could still get to
+    // what the position wants -- not only where an array is wanted outright, since
+    // `[ 1 , 2 ].length` is a number. Reachability, like every other entry gate.
+    // An empty literal must be the array itself, since it has no element to take a
+    // type from: `[ 1 ].length` is fine, `[].length` would have to invent one.
+    if (rule == rules.arr_empty) {
+      return need == T_NUMA || need == T_STRA || need == T_BOOLA;
+    }
     if (rule == rules.arr_lit) {
-      return need < 0 || need == T_NUMA || need == T_STRA || need == T_BOOLA;
+      if (need < 0) return true;
+      for (int32_t array : {T_NUMA, T_STRA, T_BOOLA}) {
+        if (env.reachable(array, need)) return true;
+      }
+      return false;
     }
     return true;
   });

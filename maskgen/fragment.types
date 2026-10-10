@@ -119,8 +119,10 @@ _arr_lit        gate=environment
 # work out from the position -- enter_need=derive is that question.
 _arr_elem       enter_need=derive element  enter_have=none  finish=combine array
 # An empty literal has no element to take a type from, so it produces whatever the
-# position required: at a number[] position, [] is a number[].
-_arr_empty      enter_have=none      finish=produce_required
+# position required: at a number[] position, [] is a number[]. It is gated on the
+# position wanting an array OUTRIGHT, not merely on an array being able to reach it:
+# `[ 1 ].length` is a number, but `[].length` would have to invent an element type.
+_arr_empty      enter_have=none      finish=produce_required   gate=environment
 _num_lit        finish=produce number
 _str_lit        finish=produce string
 _bool_lit       finish=produce boolean
@@ -129,8 +131,16 @@ _bool_lit       finish=produce boolean
 _lex_name       finish=produce_text  content=lexicon
 _lex_member     finish=produce_text  content=lexicon
 
+# A postfix expression is a new value: it must not start out holding whatever the
+# position around it has produced, or an atom's own type is dropped in favour of the
+# stale one. `3 + msg` is the case -- the second operand would come out a number.
+_postfix        enter_have=none      finish=replace
+
+# An atom is one of the alternatives; whichever matched has produced its own type,
+# and the atom just carries it out to the chain that may follow.
+_atom           finish=keep_first
+
 # ---- continuations: each step retypes the whole expression ----
-_postfix        finish=replace
 _trailer        finish=replace
 _member_step    finish=replace       gate=environment
 # A call replaces the function with what calling it gives. The application itself

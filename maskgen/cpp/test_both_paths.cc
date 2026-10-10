@@ -54,6 +54,7 @@ int main(int, char** argv) {
     rules.call_step = probe.GetRuleId("_call_step");
     rules.member_step = probe.GetRuleId("_member_step");
     rules.arr_lit = probe.GetRuleId("_arr_lit");
+    rules.arr_empty = probe.GetRuleId("_arr_empty");
     rules.decl_name = probe.GetRuleId("_decl_name");
   }
 

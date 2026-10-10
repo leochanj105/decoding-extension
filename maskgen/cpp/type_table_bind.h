@@ -49,9 +49,15 @@ inline bool BuildTransitions(
     // same way, or the repeated part's result is dropped on the way out -- which is
     // exactly how `msg.length` came back typed as a string.
     //
-    // Only what the rule does to the values is carried over. Its content does not
-    // come from the symbol table, since a rule that splits has rule references in
-    // it, and gating it again would ask the environment twice about one position.
+    // Only what the rule does on FINISHING is carried over. Entering is deliberately
+    // left at the defaults, because a generated tail is a continuation of its parent
+    // and must inherit: `_postfix` starts a new value and so takes enter_have=none,
+    // but the tail holding its `.member` steps needs the receiver the atom produced.
+    // Copying that across cost member access entirely.
+    //
+    // Its content does not come from the symbol table either, since a rule that
+    // splits has rule references in it, and gating it again would ask the
+    // environment twice about one position.
     std::vector<std::string> bases{rule};
     for (size_t i = 0; i < bases.size(); ++i) {
       for (int32_t n = 1;; ++n) {
@@ -60,9 +66,10 @@ inline bool BuildTransitions(
         if (generated_id < 0) {
           break;
         }
-        Row carried = row;
-        carried.from_lexicon = false;
-        carried.gated = false;
+        Row carried;
+        carried.finish = row.finish;
+        carried.produce_tag = row.produce_tag;
+        carried.combine_tag = row.combine_tag;
         found.emplace_back(generated_id, carried);
         highest = std::max(highest, generated_id);
         bases.push_back(generated);

@@ -73,6 +73,7 @@ int main(int, char** argv) {
     rules.call_step = probe.GetRuleId("_call_step");
     rules.member_step = probe.GetRuleId("_member_step");
     rules.arr_lit = probe.GetRuleId("_arr_lit");
+    rules.arr_empty = probe.GetRuleId("_arr_empty");
     check(rules.member_name >= 0 && rules.call_step >= 0 && rules.member_step >= 0 &&
               rules.arr_lit >= 0,
           "the grammar defines the rules this environment recognises");
@@ -154,6 +155,10 @@ int main(int, char** argv) {
       {"let a : number[] = [ msg ] ;\n", "an array of strings is not an array of numbers"},
       {"let a : number[] = [ 1 , msg ] ;\n", "a mixed array has no type at all"},
       {"let a : number = [] ;\n", "an empty array is not a number"},
+      {"let a : number = [].length ;\n",
+       "and it may not start a chain either: it has no element type to invent"},
+      {"let a : number = \"abc\".toUpperCase() ;\n",
+       "a member access on a literal is checked like any other"},
       {"let a : boolean = true + true ;\n", "booleans do not add"},
       // A declared name must be new. Refused when the name ENDS, not per byte: the
       // prefix of a taken name is a fine start for a free one.
@@ -218,6 +223,13 @@ int main(int, char** argv) {
       "let a : string = 3 + msg ;\n",
       "let a : number = count + count ;\n",
       "let a : string = msg + msg ;\n",
+      // Member access on any expression, not only on a name. The _atom split in the
+      // grammar is what makes these writable without left recursion.
+      "let a : number = [ 1 , 2 ].length ;\n",
+      "let a : number = \"abc\".length ;\n",
+      "let a : string = ( msg + msg ).toUpperCase() ;\n",
+      "let a : string = ( count ).toString() ;\n",
+      "let a : string = [ msg , msg ].join(msg) ;\n",
       // A new name that merely extends one in scope is fine, which is what makes the
       // check belong at the end of the name rather than on its bytes.
       "let counter : number = 3 ;\n",

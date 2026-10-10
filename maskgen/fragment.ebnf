@@ -83,7 +83,17 @@ eq             ::= _sum | _cmp
 _cmp           ::= _cmp_operand [ \t\n]* "==" [ \t\n]* _cmp_operand
 _cmp_operand   ::= _sum
 _sum           ::= _primary ([ \t\n]* "+" [ \t\n]* _primary)*
-_primary       ::= _num_lit | _str_lit | _bool_lit | _arr_lit | _postfix
+
+# Every primary is an atom followed by any number of ".member" or "(argument)"
+# steps, so `[1, 2].length`, `"abc".length` and `( msg + msg ).toUpperCase()` are
+# all writable.
+#
+# The split into _atom exists to avoid left recursion: letting _primary itself take
+# a trailer would make _primary start with _primary. An atom is exactly the primaries
+# that are NOT postfix expressions, so the chain is written once and terminates.
+_primary       ::= _postfix
+_postfix       ::= _atom _trailer*
+_atom          ::= _num_lit | _str_lit | _bool_lit | _arr_lit | _lex_name
                  | "(" [ \t\n]* _expr [ \t\n]* ")"
 
 # An array literal's type is folded from its elements: [1, 2] is a number[] because
@@ -102,14 +112,10 @@ _num_lit       ::= [0-9] [0-9]*
 _str_lit       ::= "\"" [a-zA-Z0-9 _.,!?-]* "\""
 _bool_lit      ::= "true" | "false"
 
-# A NAME, then any number of ".member" or "(argument)" steps, with NO whitespace
-# inside the chain: `msg.split(msg)`, never `msg . split ( msg )`. Allowing it would
-# put whitespace and a member name at the same position, which is the pattern that
-# costs a factor of a thousand -- see the note on whitespace at the end of this file.
-# Only a name takes
-# them: `[1, 2].length`, `"abc".length` and `( e ).member` are not writable, where
-# PLDI allows a member access on any expression. Recorded in STATUS.md.
-_postfix       ::= _lex_name _trailer*
+# NO whitespace inside a postfix chain: `msg.split(msg)`, never `msg . split ( msg )`.
+# Allowing it would put whitespace and a member name at the same position, which is
+# the pattern that costs a factor of a thousand -- see the note on whitespace at the
+# end of this file.
 _trailer       ::= _member_step | _call_step
 _member_step   ::= "." _lex_member
 # A call is grammatical on any name. Whether the thing is callable is not a

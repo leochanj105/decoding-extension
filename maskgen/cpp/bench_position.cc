@@ -34,6 +34,7 @@ int main(int, char** argv) {
     rules.call_step = p.GetRuleId("_call_step");
     rules.member_step = p.GetRuleId("_member_step");
     rules.arr_lit = p.GetRuleId("_arr_lit");
+    rules.arr_empty = probe.GetRuleId("_arr_empty");
     rules.decl_name = p.GetRuleId("_decl_name"); }
   for (const char* prefix : {"let", "let ", "let c", "let count"}) {
     GrammarMatcher m(compiled);

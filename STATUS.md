@@ -27,8 +27,9 @@ x = e ;                                               the target's declared type
 declare function f ( a : number ) : string ;          a signature, no body
 ```
 
-Expressions: names drawn from the symbol table, member access, calls with and
-without an argument, chains of both (`msg.split(msg).length`), number / string /
+Expressions: names drawn from the symbol table, member access and calls on **any**
+expression -- `[ 1 , 2 ].length`, `( msg + msg ).toUpperCase()` -- chains of both
+(`msg.split(msg).length`), number / string /
 boolean / array literals including `[]`, `+` typed from both operands, `==`, and
 parentheses.
 Whitespace is free everywhere except inside a postfix chain, where it is not allowed.
@@ -152,12 +153,10 @@ Small, and listed first because they are cheapest:
 
 | | |
 |---|---|
-| **member access on an expression** | only a *name* takes `.member` or `(args)`. `[1, 2].length`, `"abc".length` and `( e ).member` are not writable, where PLDI allows a member access on any expression. |
 | **multi-argument functions** | ours is unary. PLDI accepts a one-argument function where a multi-argument callback is wanted, so this is less limiting than it sounds. |
 
 | | |
 |---|---|
-| **member access on an expression** | only a *name* takes `.member` or `(args)`. `[1, 2].length`, `"abc".length` and `( e ).member` are not writable, where PLDI allows a member access on any expression. |
 
 
 ### Gap that is only more data
