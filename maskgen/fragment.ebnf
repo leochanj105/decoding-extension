@@ -22,19 +22,19 @@
 # put the rest of every name outside it, where nothing is checked, and `coun`
 # followed by anything at all would be accepted.
 
-root           ::= ws stmt (ws stmt)* ws
+root           ::= [ \t\n]* stmt ([ \t\n]* stmt)* [ \t\n]*
 
 stmt           ::= let_stmt | assign_stmt | declare_stmt
 
 # "let x : T = e ;"
-let_stmt       ::= "let" ws ident ws ":" ws _type_ann ws "=" ws _expr ws ";"
+let_stmt       ::= "let" [ \t\n]* ident [ \t\n]* ":" [ \t\n]* _type_ann [ \t\n]* "=" [ \t\n]* _expr [ \t\n]* ";"
 
 # "x = e ;"
-assign_stmt    ::= _assign_target ws "=" ws _expr ws ";"
+assign_stmt    ::= _assign_target [ \t\n]* "=" [ \t\n]* _expr [ \t\n]* ";"
 
 # "declare function f(a: T): U ;" -- a signature, no body, so no nested scopes
-declare_stmt   ::= "declare" ws "function" ws ident ws "(" ws ident ws ":" ws type ws ")"
-                   ws ":" ws type ws ";"
+declare_stmt   ::= "declare" [ \t\n]* "function" [ \t\n]* ident [ \t\n]* "(" [ \t\n]* ident [ \t\n]* ":" [ \t\n]* type [ \t\n]* ")"
+                   [ \t\n]* ":" [ \t\n]* type [ \t\n]* ";"
 
 _type_ann      ::= type
 _assign_target ::= _name
@@ -46,10 +46,10 @@ type           ::= "number" | "string" | "boolean"
 # a + b == c groups as (a + b) == c, and b.c binds tighter than a + b.
 _expr          ::= eq
 eq             ::= _sum | _cmp
-_cmp           ::= _cmp_operand ws "==" ws _cmp_operand
+_cmp           ::= _cmp_operand [ \t\n]* "==" [ \t\n]* _cmp_operand
 _cmp_operand   ::= _sum
-_sum           ::= _primary (ws "+" ws _primary)*
-_primary       ::= _num_lit | _str_lit | _bool_lit | _postfix | "(" ws _expr ws ")"
+_sum           ::= _primary ([ \t\n]* "+" [ \t\n]* _primary)*
+_primary       ::= _num_lit | _str_lit | _bool_lit | _postfix | "(" [ \t\n]* _expr [ \t\n]* ")"
 
 _num_lit       ::= [0-9] [0-9]*
 _str_lit       ::= "\"" [a-zA-Z0-9 _.,!?-]* "\""
@@ -61,7 +61,7 @@ _trailer       ::= _member_step | _call_step
 _member_step   ::= "." _member_name
 # A call is grammatical on any name. Whether the thing is callable is not a
 # syntactic question, so the runtime refuses this step rather than the grammar.
-_call_step     ::= "(" ws _expr ws ")"
+_call_step     ::= "(" [ \t\n]* _expr [ \t\n]* ")"
 
 # A name being DECLARED is unconstrained, so it is an ordinary rule.
 ident          ::= [a-zA-Z_] [a-zA-Z0-9_]*
@@ -71,8 +71,19 @@ _name          ::= [a-zA-Z_] [a-zA-Z0-9_]*
 _member_name   ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
 # Whitespace is flexible: any amount, anywhere, including newlines and indentation.
-# This costs about 4% of generation time, measured over a whole statement, and was
-# not worth crippling the language to avoid. The expensive positions are those where
-# more whitespace AND an identifier are both legal, since every token that starts
-# with a space and runs on into letters becomes a candidate to walk byte by byte.
-ws             ::= [ \t\n]*
+# It is written out as [ \t\n]* at every position and is deliberately NOT a rule of
+# its own, which is worth a factor of 1,400 and costs the language nothing.
+#
+# A rule whose body is a repeated character class is the one thing on this grammar
+# that XGrammar is slow at, when what follows it is an unconstrained identifier.
+# Measured at the position after `let`, same vocabulary, same language, and the same
+# 75,912 tokens offered either way:
+#
+#   "let" ws ident      with  ws ::= [ \t\n]*     16,512 us
+#   "let" [ \t\n]* ident  spelled out inline        11.3 us
+#
+# It is not the number of legal tokens: 32,812 of them arrive in 3.4 us when they
+# come from one precomputed set. And it is not rule references in general -- a rule
+# holding a single space (sp ::= " ") costs 3.7 us. It is specifically the repetition
+# living behind a rule reference, which is the same trap as writing repetition as
+# recursion, measured at 24 ms in an earlier version of this grammar.

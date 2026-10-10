@@ -179,21 +179,63 @@ latent and are now guarded.
 | rollback | **safe.** It truncates the byte history by exactly the number of positions the byte path created, and we always take that path. |
 | subtree pruning during mask generation | **safe.** One rejected prefix eliminates a whole alphabetical block, and our refusal is itself a prefix test: if no name begins `couz`, none begins `couza`. |
 
-## Part 5 — measurements, and what is not done
+## Part 5 — measurements
 
-Measured on the fragment, with three names and six types in scope:
+`maskgen/cpp/bench_e2e.cc`. A seven-statement program using every construct, cut
+into real vocabulary tokens, with every position measured once in program order and
+the whole walk repeated with a fresh matcher. Positions are never re-measured in a
+loop: that answers "how fast is this position when nothing else is happening", which
+is not a question a decoder ever asks.
 
 ```
-mask where a name is being written     125 us
-mask at the start of an expression     189 us    (402 tokens offered)
-mask at a member position               85 us    (10 or 11 tokens offered)
-mask on a plain grammar, for scale       0.6 us
+                                        mean     median      worst      total
+with the type table                   164 us     104 us     594 us    10.3 ms
+the same language, none of this        263 us      77 us    1387 us    16.6 ms
+accept and advance a token            2.3 us     1.3 us     9.1 us     0.14 ms
 ```
 
-A model step is about 33,000 µs, so even the worst of these is well under 1% of
-generation. The overhead figure against plain XGrammar on an identical grammar
-(previously 61.1 µs against 56.0 µs, about 9%) was measured on the superseded
-design and **needs re-measuring**.
+A model step is about 33,000 µs, so the mean mask is **0.5% of a step** and the worst
+position is 1.8%. Against the same language with none of this machinery in it, the
+types make mask generation **faster**, 10.3 ms against 16.6 ms over the program:
+pruning candidates costs less than walking them. Compiling the grammar is 131 ms,
+once, before anything generates.
+
+The middle configuration — this grammar with no table installed — costs 2,585 ms,
+250 times the other two. That is not a baseline, it is a warning: downgrading a
+position to "check every candidate" is only affordable because the checks then prune
+it, and the two belong together.
+
+### The one thing that dominated, and why
+
+Before a one-line grammar change the same benchmark read 103 ms, with one position
+per statement costing 14.7 ms — 44% of a model step. All of it came from writing
+whitespace as its own rule:
+
+```
+ws ::= [ \t\n]*   referenced as  "let" ws ident     16,512 us
+the same class written inline:     "let" [ \t\n]* ident   11.3 us
+```
+
+Same language, same 75,912 tokens offered, 1,460x apart. The reason is in
+grammar_compiler.cc: a token goes on a position's precomputed list only if all of
+its bytes fit **without running off the end of the rule**. Past the end, what is
+legal depends on which rule made the reference, and a position's list is built
+without that -- one list serves all 25 users of `ws`. So every token shaped "some
+whitespace, then something that is not whitespace" became "decide at generation
+time", and there are tens of thousands of those.
+
+The condition is narrower than "avoid rules". A rule that can hold more than one byte
+and still be unfinished creates a position strictly inside itself, and that is the
+position whose list cannot answer. `[ \t\n]*` has that property, `[ ]+` has it
+(15,724 us, measured), `sp ::= " "` does not (3.7 us) because after its one byte it
+is finished and there is no inside to be in.
+
+**The fix belongs upstream.** XGrammar's optimiser already inlines rules whose bodies
+hold no rule references, which is exactly this shape, but only when the reference is
+the first element of a sequence -- and `"let" ws ident` has it second. Lifting that
+restriction would fix every grammar automatically. Doing it here instead costs a
+noisier grammar file and 100 ms more compile time, and was not worth the risk of
+changing an optimiser pass to find out.
 
 Tests: 44 checks on the table with no parser involved, 25 end-to-end checks driving
 the real grammar with real vocabulary tokens — a six-statement program accepted 51
@@ -201,6 +243,10 @@ tokens out of 51, ten ill-typed programs each blocked at a named position, eight
 well-typed ones accepted. Seven test files, all passing.
 
 Not done:
+
+0. **Whitespace inlining is a workaround, not a fix.** See above: the fix is one
+   condition in XGrammar's own inliner, and would help every grammar rather than
+   this one.
 
 1. **Declarations do not extend the symbol table.** The model can write
    `let x : number = 3;` and then cannot use `x`, because nothing records that it
