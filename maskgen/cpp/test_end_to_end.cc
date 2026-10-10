@@ -155,12 +155,6 @@ int main(int, char** argv) {
       {"let a : number[] = [ msg ] ;\n", "an array of strings is not an array of numbers"},
       {"let a : number[] = [ 1 , msg ] ;\n", "a mixed array has no type at all"},
       {"let a : number = [] ;\n", "an empty array is not a number"},
-      // NOT a win: `[].length` is legal TypeScript and we reject it. An empty
-      // literal has no element type, and the six types have no "array of anything",
-      // so it exists only where the position names the array. Refused in the safe
-      // direction, but a legal program refused all the same -- see STATUS.md.
-      {"let a : number = [].length ;\n",
-       "[].length is refused, which is a limitation and not a feature"},
       {"let a : number = \"abc\".toUpperCase() ;\n",
        "a member access on a literal is checked like any other"},
       {"let a : boolean = true + true ;\n", "booleans do not add"},
@@ -234,6 +228,10 @@ int main(int, char** argv) {
       "let a : string = ( msg + msg ).toUpperCase() ;\n",
       "let a : string = ( count ).toString() ;\n",
       "let a : string = [ msg , msg ].join(msg) ;\n",
+      // `[]` is an array of nothing, which stands for any array and has the members
+      // every array has. Both of these were refused until it had a type of its own.
+      "let a : number = [].length ;\n",
+      "let a : string = [].join(msg) ;\n",
       // A new name that merely extends one in scope is fine, which is what makes the
       // check belong at the end of the name rather than on its bytes.
       "let counter : number = 3 ;\n",

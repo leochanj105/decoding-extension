@@ -113,9 +113,6 @@ inline bool BuildTransitions(
       case Finish::kProduceText: t.finish = xgrammar::TypeFinishAction::kProduceText; break;
       case Finish::kRequireText: t.finish = xgrammar::TypeFinishAction::kRequireText; break;
       case Finish::kCheck: t.finish = xgrammar::TypeFinishAction::kCheck; break;
-      case Finish::kProduceRequired:
-        t.finish = xgrammar::TypeFinishAction::kProduceRequired;
-        break;
       case Finish::kCombine:
         t.finish = xgrammar::TypeFinishAction::kCombine;
         t.combine_op = oracle.resolve_op ? oracle.resolve_op(row.combine_tag) : -1;

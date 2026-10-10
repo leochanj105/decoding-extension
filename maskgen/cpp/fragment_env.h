@@ -46,11 +46,30 @@ struct Bitmask {
   bool allows(int id) const { return buf[id / 32] & (1 << (id % 32)); }
 };
 
-enum { T_NUM = 0, T_STR = 1, T_BOOL = 2, T_NUMA = 3, T_STRA = 4, T_BOOLA = 5, T_NTYPES = 6 };
+enum {
+  T_NUM = 0, T_STR = 1, T_BOOL = 2, T_NUMA = 3, T_STRA = 4, T_BOOLA = 5,
+  /*!
+   * \brief The type of `[]`: an array of nothing, TypeScript's never[].
+   *
+   * It exists because an empty literal has no element to take a type from, and the
+   * answer is not "no type" -- it is "an array whose element type is uninhabited",
+   * which is assignable to every array and has all the array members. That is what
+   * makes `[].length` a number and `let a : number[] = []` legal, both of which this
+   * fragment refused until this type existed.
+   *
+   * No annotation can name it: the grammar's `type` rule lists only the six, so
+   * nothing a program writes ever resolves to it.
+   */
+  T_EMPTYA = 6,
+  T_NTYPES = 7
+};
 // The requirement at a position that imposes none, such as an operand of ==.
 enum { T_ANY = T_NTYPES, T_NGROUPS = T_NTYPES + 1 };
 inline const char* const kTypeNames[] = {
-    "number", "string", "boolean", "number[]", "string[]", "boolean[]"};
+    "number", "string", "boolean", "number[]", "string[]", "boolean[]", "never[]"};
+
+/*! \brief Whether a type is one of the three array types a program can name. */
+inline bool IsNamedArray(int32_t t) { return t == T_NUMA || t == T_STRA || t == T_BOOLA; }
 inline int32_t MemberTag(int32_t recv, int32_t need) { return 100 + recv * T_NGROUPS + need; }
 
 /*!
@@ -99,17 +118,31 @@ struct Environment {
       {T_BOOL, {{"toString", FnTag(kNothing, T_STR)}}},
       {T_NUMA, {{"length", T_NUM}, {"join", FnTag(T_STR, T_STR)}}},
       {T_STRA, {{"length", T_NUM}, {"join", FnTag(T_STR, T_STR)}}},
-      {T_BOOLA, {{"length", T_NUM}, {"join", FnTag(T_STR, T_STR)}}}};
+      {T_BOOLA, {{"length", T_NUM}, {"join", FnTag(T_STR, T_STR)}}},
+      // An array of nothing still has the members every array has.
+      {T_EMPTYA, {{"length", T_NUM}, {"join", FnTag(T_STR, T_STR)}}}};
   // Which source types can reach each target, i.e. the transitive closure of the
   // member edges above. A name is admitted at a position if its type reaches what
   // the position requires, since a member access may still get there.
   std::map<int32_t, std::vector<int32_t>> reaches{
-      {T_NUM, {T_NUM, T_STR, T_NUMA, T_STRA, T_BOOLA}},
-      {T_STR, {T_NUM, T_STR, T_BOOL, T_NUMA, T_STRA, T_BOOLA}},
+      {T_NUM, {T_NUM, T_STR, T_NUMA, T_STRA, T_BOOLA, T_EMPTYA}},
+      {T_STR, {T_NUM, T_STR, T_BOOL, T_NUMA, T_STRA, T_BOOLA, T_EMPTYA}},
       {T_BOOL, {T_BOOL}},
-      {T_NUMA, {T_NUMA}},
-      {T_STRA, {T_STR, T_STRA}},
-      {T_BOOLA, {T_BOOLA}}};
+      {T_NUMA, {T_NUMA, T_EMPTYA}},
+      {T_STRA, {T_STR, T_STRA, T_EMPTYA}},
+      {T_BOOLA, {T_BOOLA, T_EMPTYA}},
+      {T_EMPTYA, {T_EMPTYA}}};
+
+  /*!
+   * \brief Whether a value of type `produced` may stand where `required` is wanted.
+   *
+   * Assignability, which is not equality: an array of nothing stands for any array.
+   * That is the only subtyping in the fragment, and it is what makes `[]` work.
+   */
+  static bool Accepts(int32_t required, int32_t produced) {
+    if (required == produced) return true;
+    return produced == T_EMPTYA && IsNamedArray(required);
+  }
 
   /*! \brief Record a declared variable. Later declarations of a name replace it. */
   void Declare(const std::string& name, int32_t type) { symbols[name] = type; }
@@ -191,7 +224,10 @@ inline int32_t Combine(int32_t op, int32_t accumulated, int32_t operand) {
       if (!IsCallable(accumulated)) return -1;
       const int32_t wanted = ParamOf(accumulated);
       const int32_t given = operand < 0 ? kNothing : operand;
-      return wanted == given ? ResultOf(accumulated) : -1;
+      // Assignability, not equality: passing an argument IS an assignment, so an
+      // array of nothing may be passed where any array is wanted. Using equality
+      // here refused `h([])`.
+      return Environment::Accepts(wanted, given) ? ResultOf(accumulated) : -1;
     }
     default: return -1;
   }
@@ -221,13 +257,16 @@ struct RuleIds {
 inline TypeOracle OracleFor(const Environment& env) {
   TypeOracle oracle;
   oracle.resolve = [&env](std::string_view text) -> int32_t {
+    // A tag the table uses for the type of `[]`. The grammar can never name it, so
+    // it needs a name of its own here.
+    if (text == "empty_array") return T_EMPTYA;
     for (int32_t t = 0; t < T_NTYPES; ++t) {
       if (text == kTypeNames[t]) return t;
     }
     auto sym = env.symbols.find(std::string(text));
     return sym == env.symbols.end() ? -1 : sym->second;
   };
-  oracle.accepts = [](int32_t required, int32_t produced) { return required == produced; };
+  oracle.accepts = Environment::Accepts;
   oracle.resolve_op = [](std::string_view name) -> int32_t {
     if (name == "plus") return 0;
     if (name == "array") return 1;
@@ -329,6 +368,7 @@ inline void Install(
   m.SetTypeResolver(
       [&env, rules](int32_t rule, std::string_view text, int32_t, int32_t have) -> int32_t {
         if (rule == rules.member_name) return env.member_type(have, text);
+        if (text == "empty_array") return T_EMPTYA;
         for (int32_t t = 0; t < T_NTYPES; ++t) {
           if (text == kTypeNames[t]) return t;
         }
@@ -336,7 +376,7 @@ inline void Install(
         return sym == env.symbols.end() ? -1 : sym->second;
       }
   );
-  m.SetTypeAcceptor([](int32_t required, int32_t produced) { return required == produced; });
+  m.SetTypeAcceptor(Environment::Accepts);
   // A declared name must be new: not already in scope, and not a reserved word.
   // Checked when the name ends, so prefixes are untouched.
   m.SetTypeDeriver(Derive);
@@ -367,11 +407,6 @@ inline void Install(
     // An array literal is worth starting wherever some array could still get to
     // what the position wants -- not only where an array is wanted outright, since
     // `[ 1 , 2 ].length` is a number. Reachability, like every other entry gate.
-    // An empty literal must be the array itself, since it has no element to take a
-    // type from: `[ 1 ].length` is fine, `[].length` would have to invent one.
-    if (rule == rules.arr_empty) {
-      return need == T_NUMA || need == T_STRA || need == T_BOOLA;
-    }
     if (rule == rules.arr_lit) {
       if (need < 0) return true;
       for (int32_t array : {T_NUMA, T_STRA, T_BOOLA}) {

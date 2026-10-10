@@ -54,7 +54,6 @@ enum class Finish {
   kRequireText,  // require the type the environment gives for the matched text
   kCheck,        // refuse to finish unless what was produced satisfies the
                  // requirement; having passed, behaves as kKeepFirst
-  kProduceRequired,  // produce whatever this position was required to produce
   kCombine,      // ask the environment to combine what the enclosing position has
                  // produced with what this rule produced, under a named operator
 };
@@ -214,9 +213,6 @@ class TypeTable {
         if (t >= 0) out.produced = t;
         break;
       }
-      case Finish::kProduceRequired:
-        if (self.required >= 0) out.produced = self.required;
-        break;
       case Finish::kCombine: {
         if (!oracle.combine || !oracle.resolve_op) {
           break;
@@ -325,7 +321,6 @@ inline bool TypeTable::Parse(std::string_view text, TypeTable* out, std::string*
         else if (value == "keep_first") row.finish = Finish::kKeepFirst;
         else if (value == "replace") row.finish = Finish::kReplace;
         else if (value == "produce_text") row.finish = Finish::kProduceText;
-        else if (value == "produce_required") row.finish = Finish::kProduceRequired;
         else if (value == "require_text") row.finish = Finish::kRequireText;
         else if (value == "check") row.finish = Finish::kCheck;
         else if (value == "combine") {

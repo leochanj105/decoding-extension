@@ -30,8 +30,8 @@ declare function f ( a : number ) : string ;          a signature, no body
 Expressions: names drawn from the symbol table, member access and calls on **any**
 expression -- `[ 1 , 2 ].length`, `( msg + msg ).toUpperCase()` -- chains of both
 (`msg.split(msg).length`), number / string /
-boolean / array literals including `[]`, `+` typed from both operands, `==`, and
-parentheses.
+boolean / array literals including `[]`, which has the type of an array of nothing
+and so stands for any array, `+` typed from both operands, `==`, and parentheses.
 Whitespace is free everywhere except inside a postfix chain, where it is not allowed.
 
 **A member access hands back the member, and a method is a function.** `msg.split` is
@@ -154,7 +154,6 @@ Small, and listed first because they are cheapest:
 | | |
 |---|---|
 | **multi-argument functions** | ours is unary. PLDI accepts a one-argument function where a multi-argument callback is wanted, so this is less limiting than it sounds. |
-| **`[].length`** | legal TypeScript, refused here. An empty literal has no element to take a type from, and the six types have no "array of anything", so `[]` exists only where the position wants a specific array. Accepting it needs either `any` -- an exclusion that defines this fragment -- or inference running backwards from `.length`, which nothing here does. Refused in the safe direction: a legal program rejected, never an illegal one accepted. |
 
 | | |
 |---|---|

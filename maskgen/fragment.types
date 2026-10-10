@@ -47,9 +47,6 @@
 #                  string, then `.length` makes the whole thing a number
 #   produce <tag>  produce a type the environment names, whatever the text. <tag> is
 #                  a name the environment resolves; it is never a type in this file
-#   produce_required  produce whatever this position was required to produce, for a
-#                  construct correct by construction with nothing of its own to take
-#                  a type from: `[]` is an array of whatever array is wanted
 #   produce_text   produce the type the environment gives for the text matched,
 #                  which is how a name gets the type it was declared with
 #   require_text   set REQUIRED from the text matched, which is how a `: string`
@@ -118,11 +115,11 @@ _arr_lit        gate=environment
 # An element must be whatever the wanted array holds, which only the environment can
 # work out from the position -- enter_need=derive is that question.
 _arr_elem       enter_need=derive element  enter_have=none  finish=combine array
-# An empty literal has no element to take a type from, so it produces whatever the
-# position required: at a number[] position, [] is a number[]. It is gated on the
-# position wanting an array OUTRIGHT, not merely on an array being able to reach it:
-# `[ 1 ].length` is a number, but `[].length` would have to invent an element type.
-_arr_empty      enter_have=none      finish=produce_required   gate=environment
+# An empty literal produces an array of nothing -- TypeScript's never[] -- which is
+# assignable to any array and has the members every array has. So it needs no
+# requirement from its position and no gate of its own: the ordinary fixed-type entry
+# gate refuses it where an array of nothing could not reach what is wanted.
+_arr_empty      enter_have=none      finish=produce empty_array
 _num_lit        finish=produce number
 _str_lit        finish=produce string
 _bool_lit       finish=produce boolean

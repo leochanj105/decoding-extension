@@ -250,9 +250,8 @@ int main(int, char**) {
   {
     TypeTable t; std::string err;
     check(TypeTable::Parse("_arg enter_need=derive parameter\n"
-                           "_elem enter_need=derive element\n"
-                           "_empty finish=produce_required\n", &t, &err),
-          "enter_need=derive and finish=produce_required parse");
+                           "_elem enter_need=derive element\n", &t, &err),
+          "enter_need=derive parses");
     TypeTable bad;
     check(!TypeTable::Parse("_arg enter_need=derive\n", &bad, &err),
           "enter_need=derive needs a question");
@@ -269,12 +268,6 @@ int main(int, char**) {
     check(t.OnEnter("_elem", Types{NUMBER, -1}, oracle).required == -1,
           "and nothing, where the position does not want an array");
 
-    // And a construct with nothing of its own produces what was required of it.
-    check(t.OnFinish("_empty", Types{STRING_ARRAY, -1}, Types{}, "", oracle).produced ==
-              STRING_ARRAY,
-          "an empty literal produces what the position required");
-    check(t.OnFinish("_empty", Types{-1, -1}, Types{-1, NUMBER}, "", oracle).produced == NUMBER,
-          "and leaves it alone where nothing was required");
   }
 
   // An array literal folds its elements into one array type by the same mechanism.
