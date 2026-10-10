@@ -147,6 +147,9 @@ _call_step      finish=replace       gate=environment
 # enter_have=none matters here: without it the empty call inherits the function as
 # its own produced value, and applying the function to itself is not what `()` means.
 _call_none      enter_have=none      finish=combine apply
-# An argument must be the parameter type of the function being called, and that
-# function is what the enclosing position has produced.
+# The list holds whatever the function still wants: it starts as the function itself
+# and each argument applied leaves the remainder, so the last one leaves the result.
+_args           finish=replace
+# An argument must be the parameter the function still wants, which is what the
+# enclosing list has produced. Applying it leaves the rest of the function.
 _arg            enter_need=derive parameter  enter_have=none  finish=combine apply

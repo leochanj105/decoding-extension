@@ -73,22 +73,76 @@ inline bool IsNamedArray(int32_t t) { return t == T_NUMA || t == T_STRA || t == 
 inline int32_t MemberTag(int32_t recv, int32_t need) { return 100 + recv * T_NGROUPS + need; }
 
 /*!
- * \brief Function types, as tags.
+ * \brief Function types, interned so that a type is still a single integer.
  *
  * A method is a function, and a member access hands you that function rather than
  * what calling it gives: `msg.split` is "takes a string, gives a string[]", and only
- * `msg.split("x")` is a string[]. Modelling it the other way round -- which this
- * fragment did until calls were implemented -- accepts TypeScript that does not type
- * check, and leaves the call machinery doing no work at all.
+ * `msg.split("x")` is a string[].
  *
- * kNothing is the parameter of a function that takes none, so `()` has a parameter
- * type to match against like any other call.
+ * `(number, string) => boolean` does not fit in an arithmetic tag, so signatures go
+ * in a table and their index is the type. The table grows only when a declaration is
+ * read, which is what keeps the universe finite: nothing a program writes can invent
+ * a signature from nothing.
+ *
+ * Several parameters are held CURRIED -- `(number, string) => boolean` is stored as
+ * `(number) => ((string) => boolean)`. Only two values travel with the parser and the
+ * function occupies one of them, so an accumulating argument list has nowhere to
+ * live; applying one argument instead yields the remaining function, and "what does
+ * the next argument need" is just the remainder's parameter. A partially applied call
+ * is left holding a function type, which the ordinary check refuses, since no
+ * annotation here can name one.
  */
-enum { kNothing = T_NGROUPS, kParamKinds = T_NGROUPS + 1 };
-inline int32_t FnTag(int32_t param, int32_t result) { return 200 + param * kParamKinds + result; }
-inline bool IsCallable(int32_t t) { return t >= 200; }
-inline int32_t ParamOf(int32_t fn) { return IsCallable(fn) ? (fn - 200) / kParamKinds : -1; }
-inline int32_t ResultOf(int32_t fn) { return IsCallable(fn) ? (fn - 200) % kParamKinds : -1; }
+class Signatures {
+ public:
+  /*! \brief The parameter of a function taking none, so `()` has one to match. */
+  static constexpr int32_t kNothing = 90;
+  /*! \brief Tags from here up are functions; well clear of the member groups. */
+  static constexpr int32_t kFirstTag = 200;
+
+  bool IsCallable(int32_t t) const {
+    return t >= kFirstTag && t - kFirstTag < static_cast<int32_t>(entries_.size());
+  }
+  int32_t ParamOf(int32_t t) const { return IsCallable(t) ? entries_[t - kFirstTag].first : -1; }
+  int32_t ResultOf(int32_t t) const { return IsCallable(t) ? entries_[t - kFirstTag].second : -1; }
+
+  /*! \brief The tag for `(param) => result`, interning it if it is new. */
+  int32_t Intern(int32_t param, int32_t result) {
+    const auto key = std::make_pair(param, result);
+    auto it = index_.find(key);
+    if (it != index_.end()) return it->second;
+    const int32_t tag = kFirstTag + static_cast<int32_t>(entries_.size());
+    entries_.push_back(key);
+    index_.emplace(key, tag);
+    return tag;
+  }
+
+  /*!
+   * \brief The tag for `(params...) => result`, built right to left.
+   *
+   * No parameters becomes `(nothing) => result`, so a nullary call matches the same
+   * way as any other instead of being a special case.
+   */
+  int32_t InternAll(const std::vector<int32_t>& params, int32_t result) {
+    if (params.empty()) return Intern(kNothing, result);
+    int32_t tag = result;
+    for (size_t i = params.size(); i > 0; --i) tag = Intern(params[i - 1], tag);
+    return tag;
+  }
+
+  /*! \brief How many arguments a tag still wants, for a message or a test. */
+  int32_t ArityOf(int32_t t) const {
+    int32_t n = 0;
+    while (IsCallable(t)) {
+      if (ParamOf(t) != kNothing) ++n;
+      t = ResultOf(t);
+    }
+    return n;
+  }
+
+ private:
+  std::vector<std::pair<int32_t, int32_t>> entries_;
+  std::map<std::pair<int32_t, int32_t>, int32_t> index_;
+};
 
 /*! \brief The array type whose elements are `element`, or -1 if there is none. */
 inline int32_t ArrayOf(int32_t element) {
@@ -104,23 +158,37 @@ inline int32_t ArrayOf(int32_t element) {
 struct Environment {
   std::map<std::string, int32_t> symbols{
       {"count", T_NUM}, {"total", T_NUM}, {"msg", T_STR}};
+  /*! \brief Function signatures, interned. Grows only when a declaration is read. */
+  Signatures signatures;
+
   // A property holds a plain type; a method holds a function type, which has to be
-  // called to get anything else. `length` is a property, `split` is a method.
+  // called to get anything else. `length` is a property, `split` is a method. The
+  // methods are filled in by the constructor rather than here, because their types
+  // have to be interned first and a table cannot intern while it is being built.
   std::map<int32_t, std::map<std::string, int32_t>> members{
-      {T_NUM,
-       {{"toString", FnTag(kNothing, T_STR)},
-        {"toFixed", FnTag(T_NUM, T_STR)},
-        {"valueOf", FnTag(kNothing, T_NUM)}}},
-      {T_STR,
-       {{"length", T_NUM},
-        {"toUpperCase", FnTag(kNothing, T_STR)},
-        {"split", FnTag(T_STR, T_STRA)}}},
-      {T_BOOL, {{"toString", FnTag(kNothing, T_STR)}}},
-      {T_NUMA, {{"length", T_NUM}, {"join", FnTag(T_STR, T_STR)}}},
-      {T_STRA, {{"length", T_NUM}, {"join", FnTag(T_STR, T_STR)}}},
-      {T_BOOLA, {{"length", T_NUM}, {"join", FnTag(T_STR, T_STR)}}},
-      // An array of nothing still has the members every array has.
-      {T_EMPTYA, {{"length", T_NUM}, {"join", FnTag(T_STR, T_STR)}}}};
+      {T_NUM, {}},
+      {T_STR, {{"length", T_NUM}}},
+      {T_BOOL, {}},
+      {T_NUMA, {{"length", T_NUM}}},
+      {T_STRA, {{"length", T_NUM}}},
+      {T_BOOLA, {{"length", T_NUM}}},
+      {T_EMPTYA, {{"length", T_NUM}}}};
+
+  Environment() {
+    const int32_t to_string = signatures.InternAll({}, T_STR);
+    const int32_t to_number = signatures.InternAll({}, T_NUM);
+    members[T_NUM]["toString"] = to_string;
+    members[T_NUM]["toFixed"] = signatures.InternAll({T_NUM}, T_STR);
+    members[T_NUM]["valueOf"] = to_number;
+    members[T_STR]["toUpperCase"] = to_string;
+    members[T_STR]["split"] = signatures.InternAll({T_STR}, T_STRA);
+    members[T_BOOL]["toString"] = to_string;
+    const int32_t join = signatures.InternAll({T_STR}, T_STR);
+    for (int32_t array : {T_NUMA, T_STRA, T_BOOLA, T_EMPTYA}) members[array]["join"] = join;
+    // Two parameters, to exercise what one cannot: `msg.replace(a, b)`.
+    members[T_STR]["replace"] = signatures.InternAll({T_STR, T_STR}, T_STR);
+  }
+
   // Which source types can reach each target, i.e. the transitive closure of the
   // member edges above. A name is admitted at a position if its type reaches what
   // the position requires, since a member access may still get there.
@@ -139,7 +207,7 @@ struct Environment {
    * Assignability, which is not equality: an array of nothing stands for any array.
    * That is the only subtyping in the fragment, and it is what makes `[]` work.
    */
-  static bool Accepts(int32_t required, int32_t produced) {
+  bool Accepts(int32_t required, int32_t produced) const {
     if (required == produced) return true;
     return produced == T_EMPTYA && IsNamedArray(required);
   }
@@ -163,7 +231,7 @@ struct Environment {
    */
   bool reachable(int32_t from, int32_t to) const {
     if (from == to) return true;
-    if (IsCallable(from)) return reachable(ResultOf(from), to);
+    if (signatures.IsCallable(from)) return reachable(signatures.ResultOf(from), to);
     auto it = reaches.find(to);
     if (it == reaches.end()) return false;
     for (int32_t s : it->second) if (s == from) return true;
@@ -190,10 +258,14 @@ inline int32_t ElementOf(int32_t array) {
  * unconstrained, which is the safe direction: a mask may offer too much, never too
  * little.
  */
-inline int32_t Derive(int32_t question, int32_t enclosing_need, int32_t enclosing_have) {
+inline int32_t Derive(
+    const Environment& env, int32_t question, int32_t enclosing_need, int32_t enclosing_have
+) {
   switch (question) {
-    case 0:  // a call argument: the parameter of the function being applied
-      return IsCallable(enclosing_have) ? ParamOf(enclosing_have) : -1;
+    case 0:  // a call argument: the parameter the function still wants
+      return env.signatures.IsCallable(enclosing_have)
+                 ? env.signatures.ParamOf(enclosing_have)
+                 : -1;
     case 1:  // an array element: what the wanted array holds
       return ElementOf(enclosing_need);
     default: return -1;
@@ -207,7 +279,9 @@ inline int32_t Derive(int32_t question, int32_t enclosing_need, int32_t enclosin
  * finished. -1 on either side means nothing yet; -1 out means the operator does not
  * apply, and the position then holds nothing and cannot be finished.
  */
-inline int32_t Combine(int32_t op, int32_t accumulated, int32_t operand) {
+inline int32_t Combine(
+    const Environment& env, int32_t op, int32_t accumulated, int32_t operand
+) {
   switch (op) {
     case 0:  // `+` : a number only when both are numbers, a string if either is
       if (accumulated < 0) return operand;
@@ -220,14 +294,13 @@ inline int32_t Combine(int32_t op, int32_t accumulated, int32_t operand) {
       if (accumulated < 0) return as_array;
       return accumulated == as_array ? accumulated : -1;
     }
-    case 2: {  // calling: `accumulated` is the function, `operand` the argument
-      if (!IsCallable(accumulated)) return -1;
-      const int32_t wanted = ParamOf(accumulated);
-      const int32_t given = operand < 0 ? kNothing : operand;
+    case 2: {  // applying ONE argument, leaving whatever the function still wants
+      if (!env.signatures.IsCallable(accumulated)) return -1;
+      const int32_t wanted = env.signatures.ParamOf(accumulated);
+      const int32_t given = operand < 0 ? Signatures::kNothing : operand;
       // Assignability, not equality: passing an argument IS an assignment, so an
-      // array of nothing may be passed where any array is wanted. Using equality
-      // here refused `h([])`.
-      return Environment::Accepts(wanted, given) ? ResultOf(accumulated) : -1;
+      // array of nothing may be passed where any array is wanted.
+      return env.Accepts(wanted, given) ? env.signatures.ResultOf(accumulated) : -1;
     }
     default: return -1;
   }
@@ -266,7 +339,9 @@ inline TypeOracle OracleFor(const Environment& env) {
     auto sym = env.symbols.find(std::string(text));
     return sym == env.symbols.end() ? -1 : sym->second;
   };
-  oracle.accepts = Environment::Accepts;
+  oracle.accepts = [&env](int32_t required, int32_t produced) {
+    return env.Accepts(required, produced);
+  };
   oracle.resolve_op = [](std::string_view name) -> int32_t {
     if (name == "plus") return 0;
     if (name == "array") return 1;
@@ -277,10 +352,10 @@ inline TypeOracle OracleFor(const Environment& env) {
   };
   // TypeScript's `+`: a number only when both operands are numbers, a string as soon
   // as either is one, and nothing otherwise.
-  oracle.combine = Combine;
-  oracle.derive = [](std::string_view question, int32_t need, int32_t have) -> int32_t {
-    if (question == "parameter") return Derive(0, need, have);
-    if (question == "element") return Derive(1, need, have);
+  oracle.combine = [&env](int32_t op, int32_t a, int32_t b) { return Combine(env, op, a, b); };
+  oracle.derive = [&env](std::string_view question, int32_t need, int32_t have) -> int32_t {
+    if (question == "parameter") return Derive(env, 0, need, have);
+    if (question == "element") return Derive(env, 1, need, have);
     return -1;
   };
   return oracle;
@@ -303,7 +378,7 @@ inline void PushSymbolNames(GrammarMatcher& m, const Environment& env) {
 
   std::vector<int32_t> function_tags;
   for (const auto& [tag, names] : by_tag) {
-    if (IsCallable(tag)) {
+    if (env.signatures.IsCallable(tag)) {
       function_tags.push_back(tag);
     }
   }
@@ -376,17 +451,21 @@ inline void Install(
         return sym == env.symbols.end() ? -1 : sym->second;
       }
   );
-  m.SetTypeAcceptor(Environment::Accepts);
+  m.SetTypeAcceptor([&env](int32_t required, int32_t produced) {
+    return env.Accepts(required, produced);
+  });
   // A declared name must be new: not already in scope, and not a reserved word.
   // Checked when the name ends, so prefixes are untouched.
-  m.SetTypeDeriver(Derive);
+  m.SetTypeDeriver([&env](int32_t question, int32_t need, int32_t have) {
+    return Derive(env, question, need, have);
+  });
   m.SetNameFilter([&env](int32_t, std::string_view text) {
     return env.symbols.count(std::string(text)) == 0 && !IsReserved(text);
   });
   // May an expression of this type *start* here -- looser than the acceptor, which
   // says whether it may stop.
   m.SetTypeReachable([&env](int32_t from, int32_t to) { return env.reachable(from, to); });
-  m.SetTypeCombiner(Combine);
+  m.SetTypeCombiner([&env](int32_t op, int32_t a, int32_t b) { return Combine(env, op, a, b); });
   // Which group of names a position draws from. A member position draws from the
   // members of the receiver that can still reach what the position requires.
   m.SetLexiconTagResolver(
@@ -402,8 +481,8 @@ inline void Install(
   m.SetStepPredicate([rules, &env](int32_t rule, int32_t need, int32_t have) {
     // A call is only worth starting on something callable, which is what makes
     // `count(...)` refused and `msg.split(...)` allowed.
-    if (rule == rules.call_step) return IsCallable(have);
-    if (rule == rules.member_step) return have >= 0 && !IsCallable(have);
+    if (rule == rules.call_step) return env.signatures.IsCallable(have);
+    if (rule == rules.member_step) return have >= 0 && !env.signatures.IsCallable(have);
     // An array literal is worth starting wherever some array could still get to
     // what the position wants -- not only where an array is wanted outright, since
     // `[ 1 , 2 ].length` is a number. Reachability, like every other entry gate.
@@ -446,7 +525,8 @@ class Declarations {
     // deduplication an earlier entry grows in place as its rule matches more text,
     // so positions are not stable until the occurrence is finished.
     size_t statements = 0;
-    std::string name, type, fn_name, param_type, return_type;
+    std::string name, type, fn_name, return_type;
+    std::vector<std::string> param_types;
     for (const auto& [which, text] : captures) {
       if (which == "name") {
         name = text;
@@ -455,7 +535,9 @@ class Declarations {
       } else if (which == "fn_name") {
         fn_name = text;
       } else if (which == "param_type") {
-        param_type = text;
+        // One capture per parameter, in order, so a signature with several of them
+        // arrives as several entries.
+        param_types.push_back(text);
       } else if (which == "return_type") {
         return_type = text;
       } else if (which == "statement" || which == "declaration") {
@@ -473,14 +555,25 @@ class Declarations {
           // A signature declares a name whose type is a function. Nothing else in
           // the fragment can produce one, so this is the only way the type graph
           // gains an edge the model wrote.
-          const int32_t param = TypeNamed(param_type);
           const int32_t result = TypeNamed(return_type);
-          if (param >= 0 && result >= 0) {
-            const int32_t fn = FnTag(param, result);
+          std::vector<int32_t> params;
+          bool understood = result >= 0;
+          for (const std::string& each : param_types) {
+            const int32_t t = TypeNamed(each);
+            if (t < 0) understood = false;
+            params.push_back(t);
+          }
+          if (understood) {
+            const int32_t fn = env_->signatures.InternAll(params, result);
             env_->Declare(fn_name, fn);
             fresh.emplace_back(fn_name, fn);
           }
         }
+        name.clear();
+        type.clear();
+        fn_name.clear();
+        return_type.clear();
+        param_types.clear();
       }
     }
     handled_ = statements;

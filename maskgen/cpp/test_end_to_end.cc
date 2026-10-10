@@ -157,6 +157,12 @@ int main(int, char** argv) {
       {"let a : number = [] ;\n", "an empty array is not a number"},
       {"let a : number = \"abc\".toUpperCase() ;\n",
        "a member access on a literal is checked like any other"},
+      {"let a : string = msg.replace(msg) ;\n",
+       "one argument of two leaves a function, not a string"},
+      {"let a : string = msg.replace(msg, 3) ;\n",
+       "replace wants two strings, and 3 is not one"},
+      {"let a : string = msg.replace(msg, msg, msg) ;\n",
+       "and it does not want three"},
       {"let a : boolean = true + true ;\n", "booleans do not add"},
       // A declared name must be new. Refused when the name ENDS, not per byte: the
       // prefix of a taken name is a fine start for a free one.
@@ -231,6 +237,9 @@ int main(int, char** argv) {
       // `[]` is an array of nothing, which stands for any array and has the members
       // every array has. Both of these were refused until it had a type of its own.
       "let a : number = [].length ;\n",
+      // Two parameters. The list is applied one argument at a time, each leaving
+      // whatever the function still wants.
+      "let a : string = msg.replace(msg, msg) ;\n",
       "let a : string = [].join(msg) ;\n",
       // A new name that merely extends one in scope is fine, which is what makes the
       // check belong at the end of the name rather than on its bytes.
@@ -358,7 +367,7 @@ int main(int, char** argv) {
       }
       got += decoded[id];
       for (const auto& [name, type] : declared.Poll()) {
-        registered.push_back(name + (IsCallable(type) ? ":function" : ":value"));
+        registered.push_back(name + (growing.signatures.IsCallable(type) ? ":function" : ":value"));
       }
     }
     check(all, "a function the program declared can then be called" +
@@ -446,6 +455,65 @@ int main(int, char** argv) {
            "declare function h ( a : number[] ) : string ;\nlet s : string = h([ 1 ]) ;\n",
            "declare function h ( a : number[] ) : string ;\nlet s : string = h([ 1 , 2 ]) ;\n",
            "declare function h ( a : number[] ) : string ;\nlet s : string = h([]) ;\n",
+       }) {
+    GrammarMatcher m(compiled);
+    Environment growing = env;
+    Install(m, growing, table, rules);
+    Declarations declared(&growing, &m);
+    Bitmask bm(V);
+    bool all = true;
+    std::string got;
+    for (int32_t id : Tokenize(text, by_text)) {
+      m.FillNextTokenBitmask(&bm.t, 0);
+      if (!bm.allows(id) || !m.AcceptToken(id)) {
+        all = false;
+        got += " <<[" + decoded[id] + "]";
+        break;
+      }
+      got += decoded[id];
+      declared.Poll();
+    }
+    check(all, "accepted: " + text.substr(text.find('\n') + 1,
+                                          text.size() - text.find('\n') - 2) +
+                   (all ? "" : "  stopped: " + got));
+  }
+
+  // Declared functions with zero, one and two parameters. The curried encoding is
+  // what makes several arguments work without a third value travelling with the
+  // parser, and a partly applied call is refused because it is still a function.
+  for (const auto& [text, why] : std::vector<std::pair<std::string, std::string>>{
+           {"declare function j ( a : number , b : string ) : boolean ;\n"
+            "let x : boolean = j(count) ;\n",
+            "one argument of two leaves a function, not a boolean"},
+           {"declare function j ( a : number , b : string ) : boolean ;\n"
+            "let x : boolean = j(msg, msg) ;\n",
+            "the first parameter is a number, so a string is refused"},
+           {"declare function j ( a : number , b : string ) : boolean ;\n"
+            "let x : boolean = j(count, count) ;\n",
+            "and the second is a string, so a number is refused"},
+           {"declare function k ( ) : string ;\nlet x : string = k(msg) ;\n",
+            "a function taking nothing is refused an argument"},
+       }) {
+    GrammarMatcher m(compiled);
+    Environment growing = env;
+    Install(m, growing, table, rules);
+    Declarations declared(&growing, &m);
+    Bitmask bm(V);
+    bool blocked = false;
+    for (int32_t id : Tokenize(text, by_text)) {
+      m.FillNextTokenBitmask(&bm.t, 0);
+      if (!bm.allows(id) || !m.AcceptToken(id)) { blocked = true; break; }
+      declared.Poll();
+    }
+    check(blocked, why);
+  }
+
+  for (const auto& text : std::vector<std::string>{
+           "declare function j ( a : number , b : string ) : boolean ;\n"
+           "let x : boolean = j(count, msg) ;\n",
+           "declare function k ( ) : string ;\nlet x : string = k() ;\n",
+           "declare function l ( a : number , b : string , c : boolean ) : string ;\n"
+           "let x : string = l(count, msg, true) ;\n",
        }) {
     GrammarMatcher m(compiled);
     Environment growing = env;

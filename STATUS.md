@@ -24,7 +24,7 @@ Three statement forms:
 ```
 let x : string = e ;                                  an annotation sets the goal type
 x = e ;                                               the target's declared type does
-declare function f ( a : number ) : string ;          a signature, no body
+declare function f ( a : number , b : string ) : boolean ;    a signature, no body
 ```
 
 Expressions: names drawn from the symbol table, member access and calls on **any**
@@ -153,7 +153,6 @@ Small, and listed first because they are cheapest:
 
 | | |
 |---|---|
-| **multi-argument functions** | ours is unary. PLDI accepts a one-argument function where a multi-argument callback is wanted, so this is less limiting than it sounds. |
 
 | | |
 |---|---|

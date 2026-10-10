@@ -59,14 +59,19 @@ assign_stmt    ::= _assign_target [ \t\n]* "=" [ \t\n]* _expr [ \t\n]* ";"
 # The three captures are what reach the symbol table: the function's own name, and
 # the two annotations, which together make the type it is declared with.
 declare_stmt[capture="declaration"] ::= "declare" [ \t\n]* "function" [ \t\n]* _fn_name
-                   [ \t\n]* "(" [ \t\n]* ident [ \t\n]* ":" [ \t\n]* _param_type [ \t\n]* ")"
-                   [ \t\n]* ":" [ \t\n]* _return_type [ \t\n]* ";"
+                   [ \t\n]* sig_params [ \t\n]* ":" [ \t\n]* _return_type [ \t\n]* ";"
+
+# Zero or more parameters. sig_params and param carry no meaning of their own, so
+# they are not underscored and have no row: only the annotations are captured.
+sig_params     ::= "(" [ \t\n]* ")"
+                 | "(" [ \t\n]* param ([ \t\n]* "," [ \t\n]* param)* [ \t\n]* ")"
+param          ::= ident [ \t\n]* ":" [ \t\n]* _param_type
 
 # A function being declared: a new name, like a variable's.
 _fn_name[capture="fn_name"] ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
-# The two halves of the declared type. Separate rules only so the two captures can be
-# told apart; neither constrains anything, since a signature has no expression in it.
+# The declared type's parts. Each parameter's annotation is captured in turn, so a
+# signature with several of them arrives as several captures in order.
 _param_type[capture="param_type"] ::= type
 _return_type[capture="return_type"] ::= type
 
@@ -124,8 +129,16 @@ _member_step   ::= "." _lex_member
 # The two forms are separate rules because they apply the function differently: with
 # an argument, the argument's own type is what gets applied; with none, there is
 # nothing to complete inside the call, so the empty form has to do it itself.
-_call_step     ::= _call_none | "(" [ \t\n]* _arg [ \t\n]* ")"
+_call_step     ::= _call_none | "(" [ \t\n]* _args [ \t\n]* ")"
 _call_none     ::= "(" [ \t\n]* ")"
+
+# The argument list is written RIGHT-NESTED, not repeated. A repetition's tail
+# inherits its values at the moment it is predicted, which is before the first
+# argument has been applied -- so every argument would be checked against the first
+# parameter. Nesting the rest of the list after the comma means the inner occurrence
+# is predicted only once the argument before it has finished, and so sees what the
+# function still wants.
+_args          ::= _arg | _arg [ \t\n]* "," [ \t\n]* _args
 _arg           ::= eq
 
 # A name being DECLARED is unconstrained: any identifier is legal, whatever the
