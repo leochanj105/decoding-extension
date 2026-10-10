@@ -102,7 +102,7 @@ answers a question no decoder asks.
 
 ```
                                     mean     median      worst      total
-mask generation                   172 us     103 us     827 us    16.2 ms
+mask generation                   152 us      96 us     761 us    14.3 ms
 the same language, none of this   222 us      17 us    1339 us    20.9 ms
 accept and advance one token      2.2 us     1.5 us     9.5 us    0.21 ms
 compiling the grammar                                             121 ms (once)
@@ -111,8 +111,8 @@ compiling the grammar                                             121 ms (once)
 Nine statements, 94 tokens, including calls, an array literal, and two statements
 that use names earlier ones declared.
 
-A model step is about 33,000 µs, so the mean mask is **0.5% of a step** and the worst
-position 2.5%. Against the same language with none of this machinery, the type
+A model step is about 33,000 µs, so the mean mask is **0.46% of a step** and the worst
+position 2.3%. Against the same language with none of this machinery, the type
 checking makes mask generation **faster** — 10.3 ms against 16.6 ms — because cutting
 76,000 candidates to a few hundred costs less than walking them. There is no overhead
 to defend.

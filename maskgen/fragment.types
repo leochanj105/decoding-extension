@@ -74,6 +74,12 @@
 # It has a row only because every underscored rule must, and underscored only because
 # the caller finds it by name. Its capture is what matters, not its types.
 _decl_name      finish=pass          content=fresh
+# A function's name is a new name too, so it may not collide either.
+_fn_name        finish=pass          content=fresh
+# A signature's annotations constrain nothing: there is no expression in a signature
+# for them to constrain. They exist to be captured.
+_param_type     finish=pass
+_return_type    finish=pass
 
 # ---- where a requirement enters the parse ----
 _type_ann       finish=require_text

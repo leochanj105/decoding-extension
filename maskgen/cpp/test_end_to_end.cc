@@ -310,6 +310,87 @@ int main(int, char** argv) {
     check(blocked, "and declaring it a second time is refused");
   }
 
+  // A `declare function` puts a function type in scope, which is the only way the
+  // type GRAPH gains an edge the model wrote. Everything else -- members, operators,
+  // literals -- was fixed before generation started.
+  //
+  // The chosen edge is number -> boolean, because nothing in the starting environment
+  // reaches boolean from anything: no name has that type and no member returns one.
+  // So the second statement here is impossible until the first one is written.
+  {
+    GrammarMatcher m(compiled);
+    Environment growing = env;
+    Install(m, growing, table, rules);
+    Declarations declared(&growing, &m);
+    Bitmask bm(V);
+    std::vector<std::string> registered;
+    const std::string program =
+        "declare function g ( a : number ) : boolean ;\n"
+        "let y : boolean = g(count) ;\n";
+    bool all = true;
+    std::string got;
+    for (int32_t id : Tokenize(program, by_text)) {
+      m.FillNextTokenBitmask(&bm.t, 0);
+      if (!bm.allows(id) || !m.AcceptToken(id)) {
+        all = false;
+        got += " <<[" + decoded[id] + "]";
+        break;
+      }
+      got += decoded[id];
+      for (const auto& [name, type] : declared.Poll()) {
+        registered.push_back(name + (IsCallable(type) ? ":function" : ":value"));
+      }
+    }
+    check(all, "a function the program declared can then be called" +
+                   (all ? "" : "  stopped: " + got));
+    check(registered.size() == 2 && registered[0] == "g:function",
+          "g was registered as a function");
+  }
+
+  // The same program without the declaration must fail, or the test above proves
+  // nothing: it has to be the declaration that made the call possible.
+  {
+    GrammarMatcher m(compiled);
+    Environment growing = env;
+    Install(m, growing, table, rules);
+    Declarations declared(&growing, &m);
+    Bitmask bm(V);
+    bool blocked = false;
+    for (int32_t id : Tokenize("let y : boolean = g(count) ;\n", by_text)) {
+      m.FillNextTokenBitmask(&bm.t, 0);
+      if (!bm.allows(id) || !m.AcceptToken(id)) { blocked = true; break; }
+      declared.Poll();
+    }
+    check(blocked, "and without the declaration the same call is refused");
+  }
+
+  // A declared function is checked like anything else.
+  for (const auto& [text, why] : std::vector<std::pair<std::string, std::string>>{
+           {"declare function f ( a : number ) : string ;\nlet s : number = f(3) ;\n",
+            "f returns a string, not a number"},
+           {"declare function f ( a : number ) : string ;\nlet s : string = f(msg) ;\n",
+            "f takes a number, not a string"},
+           {"declare function f ( a : number ) : string ;\nlet s : string = f() ;\n",
+            "f takes a number, so no argument is refused"},
+           {"declare function f ( a : number ) : string ;\nlet s : string = f ;\n",
+            "f itself is a function, not a string"},
+           {"declare function count ( a : number ) : string ;\n",
+            "count is already in scope, so the function's name is refused too"},
+       }) {
+    GrammarMatcher m(compiled);
+    Environment growing = env;
+    Install(m, growing, table, rules);
+    Declarations declared(&growing, &m);
+    Bitmask bm(V);
+    bool blocked = false;
+    for (int32_t id : Tokenize(text, by_text)) {
+      m.FillNextTokenBitmask(&bm.t, 0);
+      if (!bm.allows(id) || !m.AcceptToken(id)) { blocked = true; break; }
+      declared.Poll();
+    }
+    check(blocked, why);
+  }
+
   // A declared name is NOT in scope inside its own declaration: until the statement
   // ends there is nothing to register, so `let x : number = x ;` cannot parse.
   {

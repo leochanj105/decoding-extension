@@ -49,9 +49,26 @@ let_stmt[capture="statement"] ::= "let" [ \t\n]* _decl_name [ \t\n]* ":" [ \t\n]
 # "x = e ;"
 assign_stmt    ::= _assign_target [ \t\n]* "=" [ \t\n]* _expr [ \t\n]* ";"
 
-# "declare function f(a: T): U ;" -- a signature, no body, so no nested scopes
-declare_stmt   ::= "declare" [ \t\n]* "function" [ \t\n]* ident [ \t\n]* "(" [ \t\n]* ident [ \t\n]* ":" [ \t\n]* type [ \t\n]* ")"
-                   [ \t\n]* ":" [ \t\n]* type [ \t\n]* ";"
+# "declare function f(a: T): U ;" -- a signature and nothing else.
+#
+# No body, which is the point: it puts a function TYPE in scope, and so a new edge in
+# the type graph, without `return`, nested scopes or closures. The parameter's name is
+# an ordinary identifier because nothing can refer to it -- there is no body to refer
+# to it from.
+#
+# The three captures are what reach the symbol table: the function's own name, and
+# the two annotations, which together make the type it is declared with.
+declare_stmt[capture="declaration"] ::= "declare" [ \t\n]* "function" [ \t\n]* _fn_name
+                   [ \t\n]* "(" [ \t\n]* ident [ \t\n]* ":" [ \t\n]* _param_type [ \t\n]* ")"
+                   [ \t\n]* ":" [ \t\n]* _return_type [ \t\n]* ";"
+
+# A function being declared: a new name, like a variable's.
+_fn_name[capture="fn_name"] ::= [a-zA-Z_] [a-zA-Z0-9_]*
+
+# The two halves of the declared type. Separate rules only so the two captures can be
+# told apart; neither constrains anything, since a signature has no expression in it.
+_param_type[capture="param_type"] ::= type
+_return_type[capture="return_type"] ::= type
 
 _type_ann[capture="type"] ::= type
 _assign_target ::= _lex_name

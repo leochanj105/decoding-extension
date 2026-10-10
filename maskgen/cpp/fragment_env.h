@@ -220,15 +220,48 @@ inline TypeOracle OracleFor(const Environment& env) {
  * the lists to drift out of step with the environment.
  */
 inline void PushSymbolNames(GrammarMatcher& m, const Environment& env) {
-  for (int32_t t = 0; t < T_NTYPES; ++t) {
-    std::vector<std::string> names;
-    for (const auto& [n, ty] : env.symbols) if (ty == t) names.push_back(n);
-    m.SetLexiconNames(t, names);
-    m.SetLexiconReachableTags(t, env.reaches.at(t));
+  // Names grouped by the type they were declared with. A function-typed name gets a
+  // group of its own, because its type is not one of the six.
+  std::map<int32_t, std::vector<std::string>> by_tag;
+  for (const auto& [name, type] : env.symbols) {
+    by_tag[type].push_back(name);
   }
-  // The any group holds no names of its own; every type's names can reach it.
+
+  std::vector<int32_t> function_tags;
+  for (const auto& [tag, names] : by_tag) {
+    if (IsCallable(tag)) {
+      function_tags.push_back(tag);
+    }
+  }
+
+  for (int32_t t = 0; t < T_NTYPES; ++t) {
+    auto it = by_tag.find(t);
+    m.SetLexiconNames(t, it == by_tag.end() ? std::vector<std::string>{} : it->second);
+    // Which groups a position requiring t draws from: the base types that reach t,
+    // plus any function in scope that reaches t by being called. This is where a
+    // `declare function` widens the graph -- the model writes a signature and a type
+    // that reached nothing before now reaches something.
+    std::vector<int32_t> sources = env.reaches.at(t);
+    for (int32_t fn : function_tags) {
+      if (env.reachable(fn, t)) {
+        sources.push_back(fn);
+      }
+    }
+    m.SetLexiconReachableTags(t, sources);
+  }
+
+  // A function-typed name is also legal where that exact function type is wanted,
+  // which is what makes `f` writable before the `(` that calls it.
+  for (int32_t fn : function_tags) {
+    m.SetLexiconNames(fn, by_tag.at(fn));
+    m.SetLexiconReachableTags(fn, {fn});
+  }
+
+  // The any group holds no names of its own; everything in scope can reach it.
   m.SetLexiconNames(T_ANY, {});
-  m.SetLexiconReachableTags(T_ANY, {T_NUM, T_STR, T_BOOL, T_NUMA, T_STRA, T_BOOLA});
+  std::vector<int32_t> everything{T_NUM, T_STR, T_BOOL, T_NUMA, T_STRA, T_BOOLA};
+  everything.insert(everything.end(), function_tags.begin(), function_tags.end());
+  m.SetLexiconReachableTags(T_ANY, everything);
 }
 
 /*! \brief Install an environment on a matcher, driven by the type table. */
@@ -332,21 +365,40 @@ class Declarations {
     // deduplication an earlier entry grows in place as its rule matches more text,
     // so positions are not stable until the occurrence is finished.
     size_t statements = 0;
-    std::string name, type;
+    std::string name, type, fn_name, param_type, return_type;
     for (const auto& [which, text] : captures) {
       if (which == "name") {
         name = text;
       } else if (which == "type") {
         type = text;
-      } else if (which == "statement") {
+      } else if (which == "fn_name") {
+        fn_name = text;
+      } else if (which == "param_type") {
+        param_type = text;
+      } else if (which == "return_type") {
+        return_type = text;
+      } else if (which == "statement" || which == "declaration") {
         ++statements;
-        if (statements <= handled_ || name.empty() || type.empty()) {
+        if (statements <= handled_) {
           continue;
         }
-        const int32_t t = TypeNamed(type);
-        if (t >= 0) {
-          env_->Declare(name, t);
-          fresh.emplace_back(name, t);
+        if (which == "statement" && !name.empty() && !type.empty()) {
+          const int32_t t = TypeNamed(type);
+          if (t >= 0) {
+            env_->Declare(name, t);
+            fresh.emplace_back(name, t);
+          }
+        } else if (which == "declaration" && !fn_name.empty()) {
+          // A signature declares a name whose type is a function. Nothing else in
+          // the fragment can produce one, so this is the only way the type graph
+          // gains an edge the model wrote.
+          const int32_t param = TypeNamed(param_type);
+          const int32_t result = TypeNamed(return_type);
+          if (param >= 0 && result >= 0) {
+            const int32_t fn = FnTag(param, result);
+            env_->Declare(fn_name, fn);
+            fresh.emplace_back(fn_name, fn);
+          }
         }
       }
     }
