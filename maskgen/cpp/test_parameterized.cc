@@ -44,13 +44,13 @@ struct Bitmask {
 
 // ONE let rule. The annotation decides the requirement.
 static const char* kGrammar =
-    "root      ::= \"let x:\" _type_ann \"=\" _name \";\"\n"
+    "root      ::= \"let x:\" _type_ann \"=\" _lex_name \";\"\n"
     "_type_ann ::= \"number\" | \"string\"\n"
-    "_name     ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
+    "_lex_name     ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
 
 static const char* kTable =
     "_type_ann finish=require_text\n"
-    "_name     finish=produce_text  content=lexicon\n";
+    "_lex_name     finish=produce_text  content=lexicon\n";
 
 static const int T_NUMBER = 0, T_STRING = 1;
 

@@ -46,6 +46,14 @@ Three files, with one job each:
 | `maskgen/fragment.types` | what each rule does to the types. 16 rows, one per rule |
 | `maskgen/cpp/type_table*.h` | reads the table, applies it, and refuses to run if the two files disagree |
 
+Declared variables reach the symbol table as the program is written, so a later
+statement can use a name an earlier one declared. A name is not in scope inside its
+own declaration, since nothing is registered until the statement's `;` lands. This
+rides on XGrammar's captures, which are recorded only on committed tokens and rolled
+back with the parser -- a hook on the rules would fire thousands of times during mask
+generation, on paths the model never takes. `declare function` does not register
+anything yet.
+
 Two values travel with the parser: what this position must end up producing, and
 what has been produced here so far. Each row of the table says how one rule
 transforms them — inherit, start fresh, drop the requirement, require a fixed type;
@@ -92,14 +100,17 @@ answers a question no decoder asks.
 
 ```
                                     mean     median      worst      total
-mask generation                   164 us     104 us     594 us    10.3 ms
-the same language, none of this   263 us      77 us    1387 us    16.6 ms
-accept and advance one token      2.3 us     1.3 us     9.1 us    0.14 ms
-compiling the grammar                                             131 ms (once)
+mask generation                   172 us     103 us     827 us    16.2 ms
+the same language, none of this   222 us      17 us    1339 us    20.9 ms
+accept and advance one token      2.2 us     1.5 us     9.5 us    0.21 ms
+compiling the grammar                                             121 ms (once)
 ```
 
+Nine statements, 94 tokens, including calls, an array literal, and two statements
+that use names earlier ones declared.
+
 A model step is about 33,000 µs, so the mean mask is **0.5% of a step** and the worst
-position 1.8%. Against the same language with none of this machinery, the type
+position 2.5%. Against the same language with none of this machinery, the type
 checking makes mask generation **faster** — 10.3 ms against 16.6 ms — because cutting
 76,000 candidates to a few hundred costs less than walking them. There is no overhead
 to defend.
@@ -138,7 +149,7 @@ Small, and listed first because they are cheapest:
 | | |
 |---|---|
 | **member access on an expression** | only a *name* takes `.member` or `(args)`. `[1, 2].length`, `"abc".length` and `( e ).member` are not writable, where PLDI allows a member access on any expression. |
-| **declarations registering names** | `let x : number = 3 ;` then `x` on the next line: `x` is not offered. Names are seeded in advance. This is the feature the mechanism was built for, and the only one of the four originally listed that is still untouched. |
+
 
 ### Gap that is only more data
 

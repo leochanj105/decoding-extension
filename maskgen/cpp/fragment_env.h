@@ -111,6 +111,9 @@ struct Environment {
       {T_STRA, {T_STR, T_STRA}},
       {T_BOOLA, {T_BOOLA}}};
 
+  /*! \brief Record a declared variable. Later declarations of a name replace it. */
+  void Declare(const std::string& name, int32_t type) { symbols[name] = type; }
+
   /*! \brief The type of `name` as a member of `receiver`, or -1. */
   int32_t member_type(int32_t receiver, std::string_view name) const {
     auto group = members.find(receiver);
@@ -198,10 +201,14 @@ inline TypeOracle OracleFor(const Environment& env) {
   return oracle;
 }
 
-/*! \brief Install an environment on a matcher, driven by the type table. */
-inline void Install(
-    GrammarMatcher& m, const Environment& env, const TypeTable& table, const RuleIds& rules
-) {
+/*!
+ * \brief Hand the matcher the names currently in scope, by type.
+ *
+ * Called again after every declaration. Only the one affected type's list actually
+ * changes, but pushing all six costs nothing at these sizes and leaves no room for
+ * the lists to drift out of step with the environment.
+ */
+inline void PushSymbolNames(GrammarMatcher& m, const Environment& env) {
   for (int32_t t = 0; t < T_NTYPES; ++t) {
     std::vector<std::string> names;
     for (const auto& [n, ty] : env.symbols) if (ty == t) names.push_back(n);
@@ -211,6 +218,13 @@ inline void Install(
   // The any group holds no names of its own; every type's names can reach it.
   m.SetLexiconNames(T_ANY, {});
   m.SetLexiconReachableTags(T_ANY, {T_NUM, T_STR, T_BOOL, T_NUMA, T_STRA, T_BOOLA});
+}
+
+/*! \brief Install an environment on a matcher, driven by the type table. */
+inline void Install(
+    GrammarMatcher& m, const Environment& env, const TypeTable& table, const RuleIds& rules
+) {
+  PushSymbolNames(m, env);
   for (int32_t r = 0; r < T_NTYPES; ++r) {
     for (int32_t need = 0; need < T_NGROUPS; ++need) {
       std::vector<std::string> ok;
@@ -273,6 +287,73 @@ inline void Install(
     return true;
   });
 }
+
+/*!
+ * \brief Puts declared variables into scope as the program is written.
+ *
+ * Call Poll() after every accepted token. It reads the matcher's captures, and on
+ * seeing a finished `let` statement takes that statement's name and type and adds
+ * them to the environment, then hands the matcher the new name lists.
+ *
+ * Why it waits for the statement rather than acting as soon as the name and type are
+ * known: until the `;` lands the declaration is not final, and a name in scope too
+ * early would make `let x : number = x ;` parse.
+ *
+ * Why captures rather than a hook on the rules: a rule completes thousands of times
+ * while a mask is computed, on parse paths the model never takes. XGrammar records a
+ * capture only on a committed token, and rolls captures back with the parser, so a
+ * name can neither be registered speculatively nor survive a rewind.
+ */
+class Declarations {
+ public:
+  Declarations(Environment* env, GrammarMatcher* matcher) : env_(env), matcher_(matcher) {}
+
+  /*! \brief Returns the names declared by this call, for a test or a log. */
+  std::vector<std::pair<std::string, int32_t>> Poll() {
+    std::vector<std::pair<std::string, int32_t>> fresh;
+    const auto captures = matcher_->GetCaptures();
+    // Rescan from the start each time rather than remembering an index: with
+    // deduplication an earlier entry grows in place as its rule matches more text,
+    // so positions are not stable until the occurrence is finished.
+    size_t statements = 0;
+    std::string name, type;
+    for (const auto& [which, text] : captures) {
+      if (which == "name") {
+        name = text;
+      } else if (which == "type") {
+        type = text;
+      } else if (which == "statement") {
+        ++statements;
+        if (statements <= handled_ || name.empty() || type.empty()) {
+          continue;
+        }
+        const int32_t t = TypeNamed(type);
+        if (t >= 0) {
+          env_->Declare(name, t);
+          fresh.emplace_back(name, t);
+        }
+      }
+    }
+    handled_ = statements;
+    if (!fresh.empty()) {
+      PushSymbolNames(*matcher_, *env_);
+    }
+    return fresh;
+  }
+
+ private:
+  static int32_t TypeNamed(std::string_view text) {
+    for (int32_t t = 0; t < T_NTYPES; ++t) {
+      if (text == kTypeNames[t]) return t;
+    }
+    return -1;
+  }
+
+  Environment* env_;
+  GrammarMatcher* matcher_;
+  /*! \brief How many finished statements have already been acted on. */
+  size_t handled_ = 0;
+};
 
 /*! \brief Cut text into vocabulary tokens by longest match, as a decoder's output would already be. */
 std::vector<int32_t> Tokenize(

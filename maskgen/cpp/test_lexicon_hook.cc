@@ -62,16 +62,16 @@ struct Bitmask {
 // rule per type.
 static const char* kGrammar =
     "root ::= (\"n=\" _wants_number \";\") | (\"a=\" _wants_array \";\")\n"
-    "_wants_number ::= _name\n"
-    "_wants_array ::= _name\n"
-    "_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
+    "_wants_number ::= _lex_name\n"
+    "_wants_array ::= _lex_name\n"
+    "_lex_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
 
 // Two positions with fixed requirements, imposed by the construct rather than read
 // from any text -- which is what a fixed enter_need is for.
 static const char* kTable =
     "_wants_number enter_need=number    enter_have=none  finish=check\n"
     "_wants_array  enter_need=number[]  enter_have=none  finish=check\n"
-    "_name         finish=produce_text     content=lexicon\n";
+    "_lex_name         finish=produce_text     content=lexicon\n";
 
 static const int TAG_NUMBER = 0, TAG_NUMBER_ARRAY = 1;
 
@@ -108,7 +108,7 @@ static void InstallTable(GrammarMatcher& m, const char* table_text) {
 }
 
 /*! \brief The table for the one-rule grammars, which have no requirement at all. */
-static const char* kNameOnlyTable = "_name finish=produce_text  content=lexicon\n";
+static const char* kNameOnlyTable = "_lex_name finish=produce_text  content=lexicon\n";
 
 int main(int argc, char** argv) {
   auto vocab = LoadVocab(argv[1]);
@@ -163,11 +163,11 @@ int main(int argc, char** argv) {
   // which is how identifiers actually arrive: 83% of them in real code.
   {
     auto spaced = compiler.CompileGrammar(
-        "root ::= \"n= \" _wants_number \";\"\n_wants_number ::= _name\n"
-        "_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n", "root");
+        "root ::= \"n= \" _wants_number \";\"\n_wants_number ::= _lex_name\n"
+        "_lex_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n", "root");
     GrammarMatcher m(spaced);
     InstallTable(m, "_wants_number enter_need=number  enter_have=none  finish=check\n"
-                    "_name         finish=produce_text   content=lexicon\n");
+                    "_lex_name         finish=produce_text   content=lexicon\n");
     m.SetLexiconNames(TAG_NUMBER, {"count", "total"});
     m.SetLexiconReachableTags(TAG_NUMBER, {TAG_NUMBER});
     m.AcceptString("n=");                       // the space NOT yet consumed
@@ -192,8 +192,8 @@ int main(int argc, char** argv) {
   // an identifier position with no requirement must offer nothing, not everything
   {
     auto unreq = compiler.CompileGrammar(
-        "root ::= \"x=\" _name \";\"\n"
-        "_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n", "root");
+        "root ::= \"x=\" _lex_name \";\"\n"
+        "_lex_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n", "root");
     GrammarMatcher m(unreq);
     InstallTable(m, kNameOnlyTable);
     m.SetLexiconNames(TAG_NUMBER, {"count"});

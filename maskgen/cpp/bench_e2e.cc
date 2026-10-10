@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstdio>
 #include <numeric>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -51,16 +52,23 @@ double Pct(std::vector<double> xs, double p) {
 /*!
  * \brief Walk the program once, timing every position.
  *
- * `install` is what distinguishes the two runs: the full environment, or nothing at
- * all, which leaves plain XGrammar on the same grammar.
+ * `typed` is what distinguishes the runs: with the environment and the type table
+ * installed, or with nothing at all, which leaves plain XGrammar on the same grammar.
+ * The environment is copied per walk, so declarations from one walk cannot leak into
+ * the next and every walk starts from the same scope.
  */
 std::vector<Step> WalkOnce(
     const CompiledGrammar& compiled, const std::vector<int32_t>& tokens,
-    const std::vector<std::string>& decoded, int vocab_size,
-    const std::function<void(GrammarMatcher&)>& install
+    const std::vector<std::string>& decoded, int vocab_size, bool typed,
+    const TypeTable& table, const Environment& start, const RuleIds& rules
 ) {
+  Environment env = start;
   GrammarMatcher m(compiled);
-  install(m);
+  std::optional<Declarations> declared;
+  if (typed) {
+    Install(m, env, table, rules);
+    declared.emplace(&env, &m);
+  }
   Bitmask bm(vocab_size);
   std::vector<Step> steps;
   steps.reserve(tokens.size());
@@ -90,6 +98,11 @@ std::vector<Step> WalkOnce(
       printf("  !! AcceptToken disagreed with the mask at step %zu\n", steps.size());
       return steps;
     }
+    // Part of the cost of a token, so inside the measured loop's body but outside
+    // the two timers: it is neither mask generation nor parsing.
+    if (declared) {
+      declared->Poll();
+    }
     steps.push_back(step);
   }
   return steps;
@@ -98,13 +111,14 @@ std::vector<Step> WalkOnce(
 /*! \brief Average each position over `runs` fresh walks. */
 std::vector<Step> Walk(
     const CompiledGrammar& compiled, const std::vector<int32_t>& tokens,
-    const std::vector<std::string>& decoded, int vocab_size,
-    const std::function<void(GrammarMatcher&)>& install, int runs
+    const std::vector<std::string>& decoded, int vocab_size, bool typed,
+    const TypeTable& table, const Environment& start, const RuleIds& rules, int runs
 ) {
-  std::vector<Step> total = WalkOnce(compiled, tokens, decoded, vocab_size, install);
+  std::vector<Step> total =
+      WalkOnce(compiled, tokens, decoded, vocab_size, typed, table, start, rules);
   if (total.size() != tokens.size()) return total;
   for (int r = 1; r < runs; ++r) {
-    auto again = WalkOnce(compiled, tokens, decoded, vocab_size, install);
+    auto again = WalkOnce(compiled, tokens, decoded, vocab_size, typed, table, start, rules);
     for (size_t i = 0; i < total.size(); ++i) {
       total[i].mask_us += again[i].mask_us;
       total[i].accept_us += again[i].accept_us;
@@ -180,7 +194,7 @@ int main(int argc, char** argv) {
   RuleIds rules;
   {
     GrammarMatcher probe(compiled);
-    rules.member_name = probe.GetRuleId("_member_name");
+    rules.member_name = probe.GetRuleId("_lex_member");
     rules.call_step = probe.GetRuleId("_call_step");
     rules.member_step = probe.GetRuleId("_member_step");
   }
@@ -188,13 +202,15 @@ int main(int argc, char** argv) {
   // A program that uses every construct the fragment has, so the distribution is not
   // dominated by one kind of position.
   const std::string program =
-      "let total : number = count + 3 ;\n"
+      "let sum : number = count + 3 ;\n"
       "let label : string = msg + count ;\n"
-      "let parts : string[] = msg.split ;\n"
-      "let size : number = msg.split.length ;\n"
-      "msg = count.toString ;\n"
+      "let parts : string[] = msg.split(msg) ;\n"
+      "let size : number = msg.split(msg).length ;\n"
+      "msg = count.toString() ;\n"
       "let same : boolean = count == total ;\n"
-      "let text : string = ( msg ) + msg.toUpperCase ;\n";
+      "let text : string = ( msg ) + msg.toUpperCase() ;\n"
+      "let nums : number[] = [ 1 , 2 , count ] ;\n"
+      "let used : string = label + sum ;\n";
 
   std::unordered_map<std::string, int32_t> by_text;
   for (int32_t i = 0; i < V; ++i) by_text.emplace(decoded[i], i);
@@ -208,7 +224,11 @@ int main(int argc, char** argv) {
   printf("program: %zu tokens, averaged over %d walks with a fresh matcher each time\n",
          tokens.size(), runs);
 
-  const auto with_types = [&](GrammarMatcher& m) { Install(m, env, table, rules); };
+  // The program's last statement uses two names it declared, so the benchmark also
+  // exercises registration -- and pays for the capture bookkeeping that needs.
+  static Environment growing;
+  growing = env;
+  const auto with_types = [&](GrammarMatcher& m) { Install(m, growing, table, rules); };
   const auto without = [](GrammarMatcher&) {};
 
   // A third configuration, and the only fair one for an overall number. "No table on
@@ -220,21 +240,22 @@ int main(int argc, char** argv) {
   {
     std::vector<std::string> names = table.ListedRules();
     std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
-      return a.size() > b.size();  // longest first, or _name rewrites _member_name
+      return a.size() > b.size();  // longest first, or _lex_name rewrites _lex_member
     });
     for (const std::string& name : names) {
-      const std::string bare = name.substr(1);
+      const std::string without_underscore = name.substr(1);
       for (size_t at = stripped.find(name); at != std::string::npos;
-           at = stripped.find(name, at + bare.size())) {
-        stripped.replace(at, name.size(), bare);
+           at = stripped.find(name, at + without_underscore.size())) {
+        stripped.replace(at, name.size(), without_underscore);
       }
     }
   }
   auto bare_compiled = compiler.CompileGrammar(stripped, "root");
 
-  auto typed = Walk(compiled, tokens, decoded, V, with_types, runs);
-  auto plain = Walk(compiled, tokens, decoded, V, without, runs);
-  auto bare = Walk(bare_compiled, tokens, decoded, V, without, runs);
+  auto typed = Walk(compiled, tokens, decoded, V, true, table, env, rules, runs);
+  auto plain = Walk(compiled, tokens, decoded, V, false, table, env, rules, runs);
+  auto bare = Walk(bare_compiled, tokens, decoded, V, false, table, env, rules, runs);
+
   if (typed.size() != tokens.size() || plain.size() != tokens.size()) {
     printf("the walk did not finish; nothing to report\n");
     return 1;

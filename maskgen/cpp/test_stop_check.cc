@@ -54,15 +54,15 @@ static const int T_NUMBER = 0, T_STRING = 1;
 static const char* kGrammar =
     "root      ::= \"let x:\" _type_ann \"=\" _expr \";\"\n"
     "_type_ann ::= \"number\" | \"string\"\n"
-    "_expr     ::= _name\n"
-    "_name     ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
+    "_expr     ::= _lex_name\n"
+    "_lex_name     ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
 
 // The same table format as maskgen/fragment.types, inline so the grammar and what
 // its rules mean to the types sit side by side in this one test.
 static const char* kTable =
     "_type_ann finish=require_text\n"
     "_expr     enter_have=none  finish=check\n"
-    "_name     finish=produce_text  content=lexicon\n";
+    "_lex_name     finish=produce_text  content=lexicon\n";
 
 int main(int, char** argv) {
   auto vocab = LoadVocab(argv[1]);

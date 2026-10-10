@@ -5,10 +5,18 @@
 # has been declared. Which rule does what to the types is in fragment.types, and the
 # names and their types come from the environment at runtime.
 #
-# A leading underscore on a rule name means only that something outside this file
-# refers to the rule by name, so grammar optimisation must not merge it away. It
-# carries no meaning beyond that. Every underscored rule has a row in
+# Two naming conventions, neither of which says anything about types.
+#
+# A leading underscore means something outside this file refers to the rule by name,
+# so grammar optimisation must not merge it away. Every underscored rule has a row in
 # fragment.types, and every row names an underscored rule.
+#
+# A _lex_ prefix means more: the rule's legal content is not in this file at all, it
+# comes from the symbol table at generation time. That has to be visible while the
+# grammar is COMPILED, because compiling is where a token gets marked "always legal
+# here" -- which is wrong for a position whose legal text nobody knows yet. Marking
+# more rules than necessary is expensive: when the position before a newly declared
+# name was wrongly included, its mask cost 15 ms instead of 9 us.
 #
 # Repetition is written with * and ? throughout, never as recursion. XGrammar has a
 # fast path for a repeated character class; writing `ident ::= [a-zA-Z_] | [a-zA-Z_]
@@ -27,7 +35,16 @@ root           ::= [ \t\n]* stmt ([ \t\n]* stmt)* [ \t\n]*
 stmt           ::= let_stmt | assign_stmt | declare_stmt
 
 # "let x : T = e ;"
-let_stmt       ::= "let" [ \t\n]* ident [ \t\n]* ":" [ \t\n]* _type_ann [ \t\n]* "=" [ \t\n]* _expr [ \t\n]* ";"
+#
+# The three [capture=...] attributes are how a declaration reaches the symbol table.
+# A capture means "tell the caller what text this rule matched", and XGrammar records
+# one only on a committed token, never while a mask is being computed -- which is the
+# whole difficulty: rules complete thousands of times during mask generation on paths
+# the model never takes, and registering a name from one of those would be wrong.
+# The statement's own capture is the signal that the declaration is final; until the
+# `;` lands, the name must not be usable, or `let x : number = x ;` would parse.
+let_stmt[capture="statement"] ::= "let" [ \t\n]* _decl_name [ \t\n]* ":" [ \t\n]* _type_ann
+                   [ \t\n]* "=" [ \t\n]* _expr [ \t\n]* ";"
 
 # "x = e ;"
 assign_stmt    ::= _assign_target [ \t\n]* "=" [ \t\n]* _expr [ \t\n]* ";"
@@ -36,8 +53,8 @@ assign_stmt    ::= _assign_target [ \t\n]* "=" [ \t\n]* _expr [ \t\n]* ";"
 declare_stmt   ::= "declare" [ \t\n]* "function" [ \t\n]* ident [ \t\n]* "(" [ \t\n]* ident [ \t\n]* ":" [ \t\n]* type [ \t\n]* ")"
                    [ \t\n]* ":" [ \t\n]* type [ \t\n]* ";"
 
-_type_ann      ::= type
-_assign_target ::= _name
+_type_ann[capture="type"] ::= type
+_assign_target ::= _lex_name
 
 type           ::= "number" | "string" | "boolean"
                  | "number" "[" "]" | "string" "[" "]" | "boolean" "[" "]"
@@ -72,9 +89,9 @@ _bool_lit      ::= "true" | "false"
 # Only a name takes
 # them: `[1, 2].length`, `"abc".length` and `( e ).member` are not writable, where
 # PLDI allows a member access on any expression. Recorded in STATUS.md.
-_postfix       ::= _name _trailer*
+_postfix       ::= _lex_name _trailer*
 _trailer       ::= _member_step | _call_step
-_member_step   ::= "." _member_name
+_member_step   ::= "." _lex_member
 # A call is grammatical on any name. Whether the thing is callable is not a
 # syntactic question, so the runtime refuses this step rather than the grammar.
 #
@@ -85,12 +102,17 @@ _call_step     ::= _call_none | "(" [ \t\n]* _arg [ \t\n]* ")"
 _call_none     ::= "(" [ \t\n]* ")"
 _arg           ::= eq
 
-# A name being DECLARED is unconstrained, so it is an ordinary rule.
+# A name being DECLARED is unconstrained: any identifier is legal, whatever the
+# types. It is captured so the caller can put it in the symbol table.
+_decl_name[capture="name"] ::= [a-zA-Z_] [a-zA-Z0-9_]*
+
+# A name being declared where nothing records it: a `declare function`'s own name and
+# its parameter. Registering functions is not done yet.
 ident          ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
 # A name being USED, and a member being named, come from the symbol table.
-_name          ::= [a-zA-Z_] [a-zA-Z0-9_]*
-_member_name   ::= [a-zA-Z_] [a-zA-Z0-9_]*
+_lex_name      ::= [a-zA-Z_] [a-zA-Z0-9_]*
+_lex_member    ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
 # Whitespace is flexible: any amount, anywhere, including newlines and indentation.
 # It is written out as [ \t\n]* at every position and is deliberately NOT a rule of

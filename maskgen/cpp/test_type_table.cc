@@ -127,7 +127,7 @@ int main(int, char**) {
 
   // Rules whose text comes from the symbol table, and rules the environment gates.
   {
-    check(table.RowFor("_name").from_lexicon && table.RowFor("_member_name").from_lexicon,
+    check(table.RowFor("_lex_name").from_lexicon && table.RowFor("_lex_member").from_lexicon,
           "names are drawn from the symbol table");
     check(!table.RowFor("_num_lit").from_lexicon, "a literal is not");
     check(table.RowFor("_call_step").gated && table.RowFor("_member_step").gated,
@@ -174,9 +174,9 @@ int main(int, char**) {
 
   // A name produces the type it was declared with.
   {
-    const Types after = table.OnFinish("_name", Types{}, Types{NUMBER, -1}, "msg", oracle);
+    const Types after = table.OnFinish("_lex_name", Types{}, Types{NUMBER, -1}, "msg", oracle);
     check(after.produced == STRING, "name produces the declared type of its text");
-    const Types undeclared = table.OnFinish("_name", Types{}, Types{NUMBER, -1}, "nope", oracle);
+    const Types undeclared = table.OnFinish("_lex_name", Types{}, Types{NUMBER, -1}, "nope", oracle);
     check(undeclared.produced == -1, "an undeclared name produces nothing");
   }
 
@@ -204,7 +204,7 @@ int main(int, char**) {
     check(element == Types{-1, -1},
           "an array element does not inherit the array's own accumulated type");
     check(table.FixedProduced("_cmp", oracle) == BOOLEAN, "a comparison's type is known in advance");
-    check(table.FixedProduced("_name", oracle) == -1, "a name's type is not");
+    check(table.FixedProduced("_lex_name", oracle) == -1, "a name's type is not");
   }
 
   // A rule may also impose a requirement by fiat, with no text to read: the

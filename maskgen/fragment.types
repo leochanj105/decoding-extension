@@ -56,11 +56,18 @@
 #
 # content=lexicon  the legal text here is not in the grammar: it comes from the
 #                  symbol table, and a byte is refused as soon as no name in scope
-#                  still matches what has been written
+#                  still matches what has been written. Such a rule is also named
+#                  with a _lex_ prefix in the grammar, because compilation needs to
+#                  know before this file is read
 #
 # gate=environment the environment is asked before the parser may enter this rule at
 #                  all, which is how a call on something that is not a function is
 #                  refused without writing that into the grammar
+
+# ---- a declared name, which constrains nothing and produces nothing ----
+# It has a row only because every underscored rule must, and underscored only because
+# the caller finds it by name. Its capture is what matters, not its types.
+_decl_name      finish=pass
 
 # ---- where a requirement enters the parse ----
 _type_ann       finish=require_text
@@ -93,8 +100,8 @@ _str_lit        finish=produce string
 _bool_lit       finish=produce boolean
 
 # ---- names ----
-_name           finish=produce_text  content=lexicon
-_member_name    finish=produce_text  content=lexicon
+_lex_name       finish=produce_text  content=lexicon
+_lex_member     finish=produce_text  content=lexicon
 
 # ---- continuations: each step retypes the whole expression ----
 _postfix        finish=replace

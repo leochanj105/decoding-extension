@@ -8,9 +8,9 @@
 // carries the space, the name, and nothing else -- are therefore exercised
 // throughout rather than being set up deliberately.
 //
-// The environment is fixed. Nothing yet feeds a `let` declaration back into the
-// symbol table, so the programs below use the three names given here and never
-// refer to one they declare.
+// The environment starts with three names and GROWS: a finished `let` statement puts
+// its name in scope, so a later statement can use it. The programs below rely on
+// that in places.
 //
 //   count, total : number        msg : string
 //
@@ -69,7 +69,7 @@ int main(int, char** argv) {
   RuleIds rules;
   {
     GrammarMatcher probe(compiled);
-    rules.member_name = probe.GetRuleId("_member_name");
+    rules.member_name = probe.GetRuleId("_lex_member");
     rules.call_step = probe.GetRuleId("_call_step");
     rules.member_step = probe.GetRuleId("_member_step");
     rules.arr_lit = probe.GetRuleId("_arr_lit");
@@ -225,6 +225,85 @@ int main(int, char** argv) {
     }
     check(all, "accepted: " + text.substr(0, text.size() - 1) +
                    (all ? "" : "  stopped: " + got));
+  }
+
+  // ---- declarations reaching the symbol table ----
+  //
+  // The environment is copied per case, so one program's declarations cannot leak
+  // into another's. Each case is a program plus the one thing about it that matters.
+  {
+    GrammarMatcher m(compiled);
+    Environment growing = env;
+    Install(m, growing, table, rules);
+    Declarations declared(&growing, &m);
+    Bitmask bm(V);
+    const std::string program =
+        "let n : number = 3 ;\n"
+        "let s : string = n.toString() ;\n"
+        "let t : string = s + n ;\n";
+    auto program_tokens = Tokenize(program, by_text);
+    std::vector<std::string> registered;
+    bool all = true;
+    std::string got;
+    for (int32_t id : program_tokens) {
+      m.FillNextTokenBitmask(&bm.t, 0);
+      if (!bm.allows(id) || !m.AcceptToken(id)) {
+        all = false;
+        got += " <<[" + decoded[id] + "]";
+        break;
+      }
+      got += decoded[id];
+      for (const auto& [name, type] : declared.Poll()) {
+        registered.push_back(name + ":" + kTypeNames[type]);
+      }
+    }
+    check(all, "a program that uses the names it declares parses" +
+                   (all ? "" : "  stopped: " + got));
+    check(registered.size() == 3, "three names were registered, got " +
+                                      std::to_string(registered.size()));
+    if (registered.size() == 3) {
+      check(registered[0] == "n:number", "n registered as a number, got " + registered[0]);
+      check(registered[1] == "s:string", "s registered as a string, got " + registered[1]);
+      check(registered[2] == "t:string", "t registered as a string, got " + registered[2]);
+    }
+    check(growing.symbols.count("n") == 1 && growing.symbols.count("s") == 1,
+          "the environment grew");
+    check(env.symbols.count("n") == 0, "and the original environment did not");
+  }
+
+  // A declared name is NOT in scope inside its own declaration: until the statement
+  // ends there is nothing to register, so `let x : number = x ;` cannot parse.
+  {
+    GrammarMatcher m(compiled);
+    Environment growing = env;
+    Install(m, growing, table, rules);
+    Declarations declared(&growing, &m);
+    Bitmask bm(V);
+    auto toks = Tokenize("let x : number = x ;\n", by_text);
+    bool blocked = false;
+    for (int32_t id : toks) {
+      m.FillNextTokenBitmask(&bm.t, 0);
+      if (!bm.allows(id) || !m.AcceptToken(id)) { blocked = true; break; }
+      declared.Poll();
+    }
+    check(blocked, "a name is not in scope inside its own declaration");
+  }
+
+  // A name declared with one type is not usable where another is required.
+  {
+    GrammarMatcher m(compiled);
+    Environment growing = env;
+    Install(m, growing, table, rules);
+    Declarations declared(&growing, &m);
+    Bitmask bm(V);
+    auto toks = Tokenize("let flag : boolean = true ;\nlet n : number = flag ;\n", by_text);
+    bool blocked = false;
+    for (int32_t id : toks) {
+      m.FillNextTokenBitmask(&bm.t, 0);
+      if (!bm.allows(id) || !m.AcceptToken(id)) { blocked = true; break; }
+      declared.Poll();
+    }
+    check(blocked, "a boolean name is refused where a number is required");
   }
 
   printf("\n%d failure(s)\n", failures);
