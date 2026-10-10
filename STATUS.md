@@ -28,8 +28,9 @@ declare function f ( a : number ) : string ;          a signature, no body
 ```
 
 Expressions: names drawn from the symbol table, member access and chains of it
-(`msg.split.length`), calls, number / string / boolean literals, `+`, `==`, and
-parentheses. Whitespace is free everywhere, newlines included.
+(`msg.split.length`), calls, number / string / boolean / array literals, `+` typed
+from both operands, `==`, and parentheses. Whitespace is free everywhere, newlines
+included.
 
 Three files, with one job each:
 
@@ -120,7 +121,7 @@ Small, and listed first because they are cheapest:
 | | |
 |---|---|
 | **zero-argument calls** | `_call_step ::= "(" _expr ")"` requires exactly one argument, so `msg.toUpperCase()` cannot be written — the fragment treats `.toUpperCase` as the value. Unusual TypeScript. |
-| **array literals** | `[1, 2, 3]` is not in the grammar, so `number[]` is reachable only through members. `FRAGMENT.md` lists them; the implementation never got them. |
+| **member access on an expression** | only a *name* takes `.member` or `(args)`. `[1, 2].length`, `"abc".length` and `( e ).member` are not writable, where PLDI allows a member access on any expression. |
 | **calls, in practice** | The gate is implemented and refuses correctly, but nothing in the environment is callable, so the half of the type graph that comes from *calling* a function has never run in the positive direction. Member edges carry everything today. |
 | **declarations registering names** | `let x : number = 3 ;` then `x` on the next line: `x` is not offered. Names are seeded in advance. This is the feature the mechanism was built for. |
 

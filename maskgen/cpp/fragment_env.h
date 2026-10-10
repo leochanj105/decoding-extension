@@ -90,11 +90,46 @@ struct Environment {
   }
 };
 
+/*! \brief The array type whose elements are `element`, or -1 if there is none. */
+inline int32_t ArrayOf(int32_t element) {
+  switch (element) {
+    case T_NUM: return T_NUMA;
+    case T_STR: return T_STRA;
+    case T_BOOL: return T_BOOLA;
+    default: return -1;      // no arrays of arrays in the six
+  }
+}
+
+/*!
+ * \brief What an operator does to two types.
+ *
+ * `accumulated` is what the enclosing position holds and `operand` is what just
+ * finished. -1 on either side means nothing yet; -1 out means the operator does not
+ * apply, and the position then holds nothing and cannot be finished.
+ */
+inline int32_t Combine(int32_t op, int32_t accumulated, int32_t operand) {
+  switch (op) {
+    case 0:  // `+` : a number only when both are numbers, a string if either is
+      if (accumulated < 0) return operand;
+      if (operand < 0) return accumulated;
+      if (accumulated == T_STR || operand == T_STR) return T_STR;
+      if (accumulated == T_NUM && operand == T_NUM) return T_NUM;
+      return -1;
+    case 1: {  // an array literal's element folded into the literal so far
+      const int32_t as_array = ArrayOf(operand);
+      if (accumulated < 0) return as_array;
+      return accumulated == as_array ? accumulated : -1;
+    }
+    default: return -1;
+  }
+}
+
 /*! \brief The rules this environment has to recognise by name. */
 struct RuleIds {
   int32_t member_name = -1;
   int32_t call_step = -1;
   int32_t member_step = -1;
+  int32_t arr_lit = -1;
 };
 
 /*! \brief What the type table needs from this environment. */
@@ -108,17 +143,14 @@ inline TypeOracle OracleFor(const Environment& env) {
     return sym == env.symbols.end() ? -1 : sym->second;
   };
   oracle.accepts = [](int32_t required, int32_t produced) { return required == produced; };
-  oracle.resolve_op = [](std::string_view name) -> int32_t { return name == "plus" ? 0 : -1; };
-  // TypeScript's `+`: a number only when both operands are numbers, a string as soon
-  // as either is one, and nothing otherwise.
-  oracle.combine = [](int32_t op, int32_t a, int32_t b) -> int32_t {
-    if (op != 0) return -1;
-    if (a < 0) return b;
-    if (b < 0) return a;
-    if (a == T_STR || b == T_STR) return T_STR;
-    if (a == T_NUM && b == T_NUM) return T_NUM;
+  oracle.resolve_op = [](std::string_view name) -> int32_t {
+    if (name == "plus") return 0;
+    if (name == "array") return 1;
     return -1;
   };
+  // TypeScript's `+`: a number only when both operands are numbers, a string as soon
+  // as either is one, and nothing otherwise.
+  oracle.combine = Combine;
   return oracle;
 }
 
@@ -171,14 +203,7 @@ inline void Install(
   // May an expression of this type *start* here -- looser than the acceptor, which
   // says whether it may stop.
   m.SetTypeReachable([&env](int32_t from, int32_t to) { return env.reachable(from, to); });
-  m.SetTypeCombiner([](int32_t op, int32_t a, int32_t b) -> int32_t {
-    if (op != 0) return -1;
-    if (a < 0) return b;
-    if (b < 0) return a;
-    if (a == T_STR || b == T_STR) return T_STR;
-    if (a == T_NUM && b == T_NUM) return T_NUM;
-    return -1;
-  });
+  m.SetTypeCombiner(Combine);
   // Which group of names a position draws from. A member position draws from the
   // members of the receiver that can still reach what the position requires.
   m.SetLexiconTagResolver(
@@ -191,9 +216,14 @@ inline void Install(
       }
   );
   // Nothing in this environment is callable, and a member needs a receiver.
-  m.SetStepPredicate([rules](int32_t rule, int32_t, int32_t have) {
+  m.SetStepPredicate([rules](int32_t rule, int32_t need, int32_t have) {
     if (rule == rules.call_step) return false;
     if (rule == rules.member_step) return have >= 0;
+    // An array literal is only worth starting where an array is wanted. With no
+    // requirement it is allowed, since anything could be.
+    if (rule == rules.arr_lit) {
+      return need < 0 || need == T_NUMA || need == T_STRA || need == T_BOOLA;
+    }
     return true;
   });
 }

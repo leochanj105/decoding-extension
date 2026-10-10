@@ -76,12 +76,11 @@ inline bool BuildTransitions(
   out->assign(static_cast<size_t>(highest) + 1, xgrammar::RuleTypeTransition{});
   for (const auto& [id, row] : found) {
     xgrammar::RuleTypeTransition t;
-    switch (row.enter) {
-      case Enter::kInherit: t.enter = xgrammar::TypeEnterAction::kInherit; break;
-      case Enter::kFresh: t.enter = xgrammar::TypeEnterAction::kFresh; break;
-      case Enter::kRequireNone: t.enter = xgrammar::TypeEnterAction::kRequireNone; break;
-      case Enter::kRequire:
-        t.enter = xgrammar::TypeEnterAction::kRequire;
+    switch (row.need_on_enter) {
+      case NeedOnEnter::kInherit: t.need_on_enter = xgrammar::TypeNeedOnEnter::kInherit; break;
+      case NeedOnEnter::kNone: t.need_on_enter = xgrammar::TypeNeedOnEnter::kNone; break;
+      case NeedOnEnter::kFixed:
+        t.need_on_enter = xgrammar::TypeNeedOnEnter::kFixed;
         t.required_type = oracle.resolve ? oracle.resolve(row.require_tag) : -1;
         if (t.required_type < 0) {
           if (error) *error = "the environment does not know the type \"" + row.require_tag + "\"";
@@ -89,7 +88,10 @@ inline bool BuildTransitions(
         }
         break;
     }
-    switch (row.finish) {
+    t.have_on_enter = row.have_on_enter == HaveOnEnter::kInherit
+                          ? xgrammar::TypeHaveOnEnter::kInherit
+                          : xgrammar::TypeHaveOnEnter::kNone;
+        switch (row.finish) {
       case Finish::kPass: t.finish = xgrammar::TypeFinishAction::kPass; break;
       case Finish::kKeepFirst: t.finish = xgrammar::TypeFinishAction::kKeepFirst; break;
       case Finish::kReplace: t.finish = xgrammar::TypeFinishAction::kReplace; break;

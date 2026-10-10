@@ -38,15 +38,29 @@ static TypeOracle Oracle() {
     return -1;
   };
   o.accepts = [](int32_t required, int32_t produced) { return required == produced; };
-  o.resolve_op = [](std::string_view name) -> int32_t { return name == "plus" ? 0 : -1; };
-  // TypeScript's `+`: a number only when both are numbers, a string as soon as
-  // either is one, and nothing otherwise.
+  o.resolve_op = [](std::string_view name) -> int32_t {
+    if (name == "plus") return 0;
+    if (name == "array") return 1;
+    return -1;
+  };
   o.combine = [](int32_t op, int32_t a, int32_t b) -> int32_t {
-    if (op != 0) return -1;
-    if (a < 0) return b;
-    if (b < 0) return a;
-    if (a == STRING || b == STRING) return STRING;
-    if (a == NUMBER && b == NUMBER) return NUMBER;
+    if (op == 0) {
+      // TypeScript's `+`: a number only when both are numbers, a string as soon as
+      // either is one, and nothing otherwise.
+      if (a < 0) return b;
+      if (b < 0) return a;
+      if (a == STRING || b == STRING) return STRING;
+      if (a == NUMBER && b == NUMBER) return NUMBER;
+      return -1;
+    }
+    if (op == 1) {
+      // An array literal's element folded into the literal so far.
+      const int32_t as_array = b == NUMBER   ? NUMBER_ARRAY
+                               : b == STRING ? STRING_ARRAY
+                                             : -1;
+      if (a < 0) return as_array;
+      return a == as_array ? a : -1;
+    }
     return -1;
   };
   return o;
@@ -58,11 +72,13 @@ int main(int, char**) {
   // --- the table parses, and rejects nonsense ---
   {
     TypeTable t; std::string err;
-    check(TypeTable::Parse("name enter=inherit finish=produce_text\n", &t, &err),
+    check(TypeTable::Parse("name enter_need=inherit finish=produce_text\n", &t, &err),
           "a well-formed line parses");
     check(t.Lists("name") && !t.Lists("absent"), "only listed rules are listed");
 
     check(!TypeTable::Parse("name finish=nonsense\n", &t, &err), "an unknown action is refused");
+    check(!TypeTable::Parse("name enter_have=sideways\n", &t, &err),
+          "enter_have must be inherit or none");
     check(!TypeTable::Parse("name finish=produce\n", &t, &err), "finish=produce needs a tag");
     check(!TypeTable::Parse("name finish\n", &t, &err), "a bare word is refused");
     check(!TypeTable::Parse("a finish=pass\na finish=pass\n", &t, &err),
@@ -95,7 +111,7 @@ int main(int, char**) {
       if (line.find("::=", end) == std::string::npos) continue;
       defined.push_back(line.substr(0, end));
     }
-    check(defined.size() == 16, "the grammar defines 16 underscored rules, found " +
+    check(defined.size() == 18, "the grammar defines 18 underscored rules, found " +
                                     std::to_string(defined.size()));
     std::string missing;
     for (const auto& rule : defined) if (!table.Lists(rule)) missing += " " + rule;
@@ -179,8 +195,12 @@ int main(int, char**) {
   {
     const Types after = table.OnFinish("_cmp", Types{STRING, STRING}, Types{STRING, -1}, "", oracle);
     check(after.produced == BOOLEAN, "a comparison produces boolean, not its operand's type");
-    const Types operand = table.OnEnter("_cmp_operand", Types{BOOLEAN, -1}, oracle);
-    check(operand.required == -1, "a comparison's operand carries no requirement");
+    const Types operand = table.OnEnter("_cmp_operand", Types{BOOLEAN, STRING}, oracle);
+    check(operand == Types{-1, -1},
+          "a comparison's operand carries no requirement and starts fresh");
+    const Types element = table.OnEnter("_arr_elem", Types{NUMBER_ARRAY, NUMBER_ARRAY}, oracle);
+    check(element == Types{-1, -1},
+          "an array element does not inherit the array's own accumulated type");
     check(table.FixedProduced("_cmp", oracle) == BOOLEAN, "a comparison's type is known in advance");
     check(table.FixedProduced("_name", oracle) == -1, "a name's type is not");
   }
@@ -190,10 +210,8 @@ int main(int, char**) {
   // such rule yet, so this is checked on an inline table.
   {
     TypeTable t; std::string err;
-    check(TypeTable::Parse("_cond enter=require boolean finish=check\n", &t, &err),
-          "enter=require parses");
-    TypeTable bad;
-    check(!TypeTable::Parse("_cond enter=require\n", &bad, &err), "enter=require needs a tag");
+    check(TypeTable::Parse("_cond enter_need=boolean enter_have=none finish=check\n", &t, &err),
+          "a fixed requirement parses");
     const Types inside = t.OnEnter("_cond", Types{STRING, STRING}, oracle);
     check(inside == Types{BOOLEAN, -1}, "a required position ignores what encloses it");
     check(t.FixedRequired("_cond", oracle) == BOOLEAN, "its requirement is known in advance");
@@ -211,6 +229,18 @@ int main(int, char**) {
           "a boolean literal's type is known in advance");
   }
 
+  // An array literal folds its elements into one array type by the same mechanism.
+  {
+    const auto element = [&](int32_t accumulated, int32_t elem) {
+      return table
+          .OnFinish("_arr_elem", Types{-1, elem}, Types{-1, accumulated}, "", oracle)
+          .produced;
+    };
+    check(element(-1, NUMBER) == NUMBER_ARRAY, "the first element fixes the array type");
+    check(element(NUMBER_ARRAY, NUMBER) == NUMBER_ARRAY, "a matching element keeps it");
+    check(element(NUMBER_ARRAY, STRING) == -1, "a mismatched element produces nothing");
+  }
+
   // `+` is typed from both operands. This is the only action that looks at two
   // types at once, and the reason it exists: no single operand decides the result.
   {
@@ -223,8 +253,9 @@ int main(int, char**) {
     check(plus(NUMBER, STRING) == STRING, "number + string is a string");
     check(plus(STRING, NUMBER) == STRING, "string + number is a string too");
     check(plus(-1, NUMBER) == NUMBER, "the first operand stands alone");
-    check(plus(BOOLEAN, NUMBER) == BOOLEAN,
-          "a combination the environment rejects leaves the position as it was");
+    check(plus(BOOLEAN, NUMBER) == -1,
+          "a combination the environment rejects produces nothing, and the matcher "
+          "turns that into dropping the reading");
     TypeTable bad_combine;
     check(!TypeTable::Parse("_a finish=combine\n", &bad_combine, &err),
           "finish=combine needs an operator");

@@ -14,14 +14,22 @@
 # Every rule named here is underscored in fragment.ebnf, and every underscored rule
 # there has a line here. The underscore means only "named from outside the grammar".
 #
-# enter=, applied when the parser starts a new occurrence of the rule:
+# Starting an occurrence of a rule sets the two values, and they are set
+# independently, because they are separate questions:
 #
-#   inherit        take REQUIRED and PRODUCED from the enclosing position (default)
-#   fresh          take REQUIRED, but start with nothing PRODUCED. For a position
-#                  that begins a new value, such as a call argument
-#   require_none   drop REQUIRED: this position may produce anything. For the
-#                  operands of ==, which are constrained by each other rather than
-#                  by whatever the comparison itself has to satisfy
+#   enter_need=inherit   take the enclosing position's requirement (default)
+#   enter_need=none      impose none: anything may be produced here. For a position
+#                        constrained by its siblings rather than from above, such as
+#                        an operand of == or an element of an array literal
+#   enter_need=<type>    a requirement fixed by the construct, with no text to read:
+#                        the condition of an `if` is a boolean however it is used
+#
+#   enter_have=inherit   carry on from the enclosing position (default). This is what
+#                        makes a continuation work: `.length` after `msg` needs to
+#                        know its receiver is a string
+#   enter_have=none      start having produced nothing, because this is a new value.
+#                        An array element must not start out holding the array's own
+#                        accumulated type, which is the bug that made [1, 2] fail
 #
 # finish=, applied when the rule completes and the enclosing position moves past it:
 #
@@ -59,13 +67,13 @@ _type_ann       finish=require_text
 _assign_target  finish=require_text  content=lexicon
 
 # ---- where a requirement is discharged ----
-_expr           enter=fresh          finish=check
+_expr           enter_have=none      finish=check
 
 # ---- operators ----
 # A comparison is a boolean however its operands are typed, and its operands are
 # unconstrained by what the comparison itself must satisfy.
 _cmp            finish=produce boolean
-_cmp_operand    enter=require_none   finish=pass
+_cmp_operand    enter_need=none  enter_have=none   finish=pass
 # `+` is typed from both operands, which is the only way to get TypeScript's rule
 # right: the result is a number only when both are numbers, and a string as soon as
 # either is one. Each operand combines into what precedes it, and the sum as a whole
@@ -74,6 +82,12 @@ _primary        finish=combine plus
 _sum            finish=combine plus
 
 # ---- literals ----
+# An array literal is entered only where an array is wanted, so `[` is refused at a
+# number position rather than accepted and then stranded. Its type is folded from its
+# elements by the same mechanism `+` uses: each element combines into what the
+# literal has so far, and a mismatch produces nothing, so the literal cannot finish.
+_arr_lit        gate=environment
+_arr_elem       enter_need=none  enter_have=none   finish=combine array
 _num_lit        finish=produce number
 _str_lit        finish=produce string
 _bool_lit       finish=produce boolean

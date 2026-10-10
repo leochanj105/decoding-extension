@@ -30,12 +30,17 @@ struct Types {
   }
 };
 
-/*! \brief What happens when the parser starts an occurrence of a rule. */
-enum class Enter {
-  kInherit,      // take both from the enclosing position
-  kFresh,        // take the requirement, but start having produced nothing
-  kRequireNone,  // drop the requirement: anything may be produced here
-  kRequire,      // require a fixed type, named by a tag, and produce nothing yet
+/*! \brief Where an occurrence's requirement comes from. */
+enum class NeedOnEnter {
+  kInherit,  // the enclosing position's requirement (default)
+  kNone,     // none: anything may be produced here
+  kFixed,    // a fixed type, named by a tag
+};
+
+/*! \brief What an occurrence starts out having produced. */
+enum class HaveOnEnter {
+  kInherit,  // carry on from the enclosing position (default)
+  kNone,     // nothing: this is a new value
 };
 
 /*! \brief What happens when a rule finishes and the enclosing position moves on. */
@@ -54,11 +59,12 @@ enum class Finish {
 
 /*! \brief One row of the table. */
 struct Row {
-  Enter enter = Enter::kInherit;
+  NeedOnEnter need_on_enter = NeedOnEnter::kInherit;
+  HaveOnEnter have_on_enter = HaveOnEnter::kInherit;
   Finish finish = Finish::kKeepFirst;
   /*! \brief For kProduce: the tag the environment resolves, never a type. */
   std::string produce_tag;
-  /*! \brief For kRequire: likewise. */
+  /*! \brief For NeedOnEnter::kFixed: likewise. */
   std::string require_tag;
   /*! \brief For kCombine: the operator's name, which the environment numbers. */
   std::string combine_tag;
@@ -119,21 +125,22 @@ class TypeTable {
   /*! \brief The types an occurrence of `rule` starts with, inside `enclosing`. */
   Types OnEnter(const std::string& rule, const Types& enclosing, const TypeOracle& oracle) const {
     const Row& row = RowFor(rule);
-    switch (row.enter) {
-      case Enter::kInherit:
-        return enclosing;
-      case Enter::kFresh:
-        return Types{enclosing.required, -1};
-      case Enter::kRequireNone:
-        return Types{-1, enclosing.produced};
-      case Enter::kRequire: {
+    Types out;
+    switch (row.need_on_enter) {
+      case NeedOnEnter::kInherit:
+        out.required = enclosing.required;
+        break;
+      case NeedOnEnter::kNone:
+        out.required = -1;
+        break;
+      case NeedOnEnter::kFixed:
         // A tag the environment does not know leaves the position unconstrained
         // rather than impossible, which is the safe direction for a mask.
-        const int32_t t = oracle.resolve ? oracle.resolve(row.require_tag) : -1;
-        return Types{t, -1};
-      }
+        out.required = oracle.resolve ? oracle.resolve(row.require_tag) : -1;
+        break;
     }
-    return enclosing;
+    out.produced = row.have_on_enter == HaveOnEnter::kInherit ? enclosing.produced : -1;
+    return out;
   }
 
   /*!
@@ -190,13 +197,11 @@ class TypeTable {
         if (!oracle.combine || !oracle.resolve_op) {
           break;
         }
-        const int32_t combined =
+        // A rejected combination produces nothing, rather than leaving the old value
+        // in place: `true + 3` is ill typed, and keeping the boolean would let it
+        // satisfy a boolean position.
+        out.produced =
             oracle.combine(oracle.resolve_op(row.combine_tag), enclosing.produced, self.produced);
-        // A combination the environment rejects leaves the position alone rather than
-        // erasing it; refusing belongs to whatever checks the position.
-        if (combined >= 0) {
-          out.produced = combined;
-        }
         break;
       }
       case Finish::kRequireText: {
@@ -211,7 +216,7 @@ class TypeTable {
   /*! \brief The type a rule requires of what is inside it, or -1 if it imposes none. */
   int32_t FixedRequired(const std::string& rule, const TypeOracle& oracle) const {
     const Row& row = RowFor(rule);
-    if (row.enter != Enter::kRequire || !oracle.resolve) return -1;
+    if (row.need_on_enter != NeedOnEnter::kFixed || !oracle.resolve) return -1;
     return oracle.resolve(row.require_tag);
   }
 
@@ -276,18 +281,18 @@ inline bool TypeTable::Parse(std::string_view text, TypeTable* out, std::string*
       if (eq == std::string::npos) return fail("expected key=value, got \"" + word + "\"");
       const std::string key = word.substr(0, eq);
       const std::string value = word.substr(eq + 1);
-      if (key == "enter") {
-        if (value == "inherit") row.enter = Enter::kInherit;
-        else if (value == "fresh") row.enter = Enter::kFresh;
-        else if (value == "require_none") row.enter = Enter::kRequireNone;
-        else if (value == "require") {
-          row.enter = Enter::kRequire;
-          if (i + 1 >= words.size()) return fail("enter=require needs a tag");
-          row.require_tag = words[++i];
-        } else {
-          return fail("unknown enter action \"" + value + "\"");
+      if (key == "enter_need") {
+        if (value == "inherit") row.need_on_enter = NeedOnEnter::kInherit;
+        else if (value == "none") row.need_on_enter = NeedOnEnter::kNone;
+        else {
+          row.need_on_enter = NeedOnEnter::kFixed;
+          row.require_tag = value;        // anything else names a type
         }
-      } else if (key == "finish") {
+      } else if (key == "enter_have") {
+        if (value == "inherit") row.have_on_enter = HaveOnEnter::kInherit;
+        else if (value == "none") row.have_on_enter = HaveOnEnter::kNone;
+        else return fail("enter_have must be inherit or none, got \"" + value + "\"");
+            } else if (key == "finish") {
         if (value == "pass") row.finish = Finish::kPass;
         else if (value == "keep_first") row.finish = Finish::kKeepFirst;
         else if (value == "replace") row.finish = Finish::kReplace;

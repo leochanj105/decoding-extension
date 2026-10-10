@@ -70,7 +70,9 @@ int main(int, char** argv) {
     rules.member_name = probe.GetRuleId("_member_name");
     rules.call_step = probe.GetRuleId("_call_step");
     rules.member_step = probe.GetRuleId("_member_step");
-    check(rules.member_name >= 0 && rules.call_step >= 0 && rules.member_step >= 0,
+    rules.arr_lit = probe.GetRuleId("_arr_lit");
+    check(rules.member_name >= 0 && rules.call_step >= 0 && rules.member_step >= 0 &&
+              rules.arr_lit >= 0,
           "the grammar defines the rules this environment recognises");
     std::vector<RuleTypeTransition> transitions;
     std::string error;
@@ -142,6 +144,10 @@ int main(int, char** argv) {
       {"let a : boolean[] = msg ;\n", "nothing here can produce a boolean[] at all"},
       {"let a : number = 3 + msg ;\n", "a number plus a string is a string, not a number"},
       {"let a : number = msg + msg ;\n", "two strings make a string"},
+      {"let a : number = [ 1 ] ;\n", "an array literal is not a number"},
+      {"let a : number[] = [ msg ] ;\n", "an array of strings is not an array of numbers"},
+      {"let a : number[] = [ 1 , msg ] ;\n", "a mixed array has no type at all"},
+      {"let a : boolean = true + true ;\n", "booleans do not add"},
   };
   for (const auto& [text, why] : ill_typed) {
     auto ill = Tokenize(text, by_text);
@@ -188,6 +194,12 @@ int main(int, char** argv) {
       "let a : number = count + count ;\n",
       "let a : string = msg + 3 ;\n",
       "let a : string = 3 + msg ;\n",
+      // Array literals, typed by folding their elements together.
+      "let a : number[] = [ 1 ] ;\n",
+      "let a : number[] = [ 1 , 2 , 3 ] ;\n",
+      "let a : string[] = [ msg , msg ] ;\n",
+      "let a : boolean[] = [ true , false ] ;\n",
+      "let a : number[] = [ count , 3 ] ;\n",
   };
   for (const auto& text : well_typed) {
     auto ok = Tokenize(text, by_text);

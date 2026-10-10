@@ -56,7 +56,7 @@ struct Bitmask {
 // identifier, so only the lexicon distinguishes them.
 // n= requires a number, a= requires a number[].
 //
-// Note there is ONE lexicon rule, not one per type. enter=require says "everything
+// Note there is ONE lexicon rule, not one per type. A fixed enter_need says "everything
 // inside me must produce type n"; the parser carries that requirement down and the
 // lexicon reads it from the state. That is what keeps the grammar from needing a
 // rule per type.
@@ -67,10 +67,10 @@ static const char* kGrammar =
     "_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n";
 
 // Two positions with fixed requirements, imposed by the construct rather than read
-// from any text -- which is what enter=require is for.
+// from any text -- which is what a fixed enter_need is for.
 static const char* kTable =
-    "_wants_number enter=require number    finish=check\n"
-    "_wants_array  enter=require number[]  finish=check\n"
+    "_wants_number enter_need=number    enter_have=none  finish=check\n"
+    "_wants_array  enter_need=number[]  enter_have=none  finish=check\n"
     "_name         finish=produce_text     content=lexicon\n";
 
 static const int TAG_NUMBER = 0, TAG_NUMBER_ARRAY = 1;
@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
         "root ::= \"n= \" _wants_number \";\"\n_wants_number ::= _name\n"
         "_name ::= [a-zA-Z_] [a-zA-Z0-9_]*\n", "root");
     GrammarMatcher m(spaced);
-    InstallTable(m, "_wants_number enter=require number  finish=check\n"
+    InstallTable(m, "_wants_number enter_need=number  enter_have=none  finish=check\n"
                     "_name         finish=produce_text   content=lexicon\n");
     m.SetLexiconNames(TAG_NUMBER, {"count", "total"});
     m.SetLexiconReachableTags(TAG_NUMBER, {TAG_NUMBER});

@@ -61,7 +61,7 @@ static const char* kGrammar =
 // its rules mean to the types sit side by side in this one test.
 static const char* kTable =
     "_type_ann finish=require_text\n"
-    "_expr     enter=fresh  finish=check\n"
+    "_expr     enter_have=none  finish=check\n"
     "_name     finish=produce_text  content=lexicon\n";
 
 int main(int, char** argv) {
