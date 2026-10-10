@@ -1,5 +1,10 @@
 # The TypeScript fragment we implement
 
+> This file is the design and the exclusion analysis: what to keep, what to drop, and
+> the measurement behind each call. For what is actually built and the gap to PLDI as
+> it stands, see STATUS.md. Two places where this file describes more than the
+> implementation has are marked NOT IMPLEMENTED below.
+
 Supersedes GRAMMAR.md, which described a three-type toy with a fixed prelude. That
 toy was too easy: with no declarations during generation and a trivial type graph,
 any approach wins.
@@ -23,8 +28,10 @@ without losing the graph.
 
 **Member tables are ported from PLDI, not invented.** The measurement below is what
 decided that: closing over their real member tables from these six types reaches
-60% of the full environment's type graph, and a hand-picked member list would
-reach far less.
+32% of the full environment's type graph, and a hand-picked member list would reach
+far less. (An earlier version of this line said 60%, which the table further down
+contradicts; 32% is the figure that counts edges by type equality rather than by
+string.)
 
 ## Grammar
 
@@ -44,8 +51,11 @@ Expr     ::= Literal
            | Expr "==" Expr
            | "(" Expr ")"
 
-Args     ::= ε | Expr
-Literal  ::= Number | String | Boolean | "[" ArrayItems "]"
+Args     ::= ε | Expr                                      -- NOT IMPLEMENTED: the
+                                                           -- implementation requires
+                                                           -- exactly one argument
+Literal  ::= Number | String | Boolean | "[" ArrayItems "]"   -- array literals NOT
+                                                              -- IMPLEMENTED
 Type     ::= "number" | "string" | "boolean"
            | "number[]" | "string[]" | "boolean[]"
 Ident    ::= [a-zA-Z_] [a-zA-Z0-9_]*                       -- excluding reserved words
