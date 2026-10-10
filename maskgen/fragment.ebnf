@@ -87,12 +87,15 @@ _primary       ::= _num_lit | _str_lit | _bool_lit | _arr_lit | _postfix
                  | "(" [ \t\n]* _expr [ \t\n]* ")"
 
 # An array literal's type is folded from its elements: [1, 2] is a number[] because
-# every element is a number. The elements carry no requirement of their own -- what
-# the position needs is checked once, on the whole literal -- so a mixed array is
-# refused at the closing bracket rather than at the element that broke it. Empty
-# arrays are NOT here: [] has no element to take a type from, so it needs the
-# requirement itself, which is the same missing piece as a call argument's type.
-_arr_lit       ::= "[" [ \t\n]* _arr_elem ([ \t\n]* "," [ \t\n]* _arr_elem)* [ \t\n]* "]"
+# every element is a number. Each element's own requirement is DERIVED from what the
+# position wants -- at a number[] position an element must be a number -- so a wrong
+# element is refused as it is written rather than at the closing bracket.
+#
+# An empty literal has no element to take a type from, so it takes the position's
+# type whole: at a number[] position, [] is a number[]. That is the same derived
+# requirement, asked a different way.
+_arr_lit       ::= _arr_empty | "[" [ \t\n]* _arr_elem ([ \t\n]* "," [ \t\n]* _arr_elem)* [ \t\n]* "]"
+_arr_empty     ::= "[" [ \t\n]* "]"
 _arr_elem      ::= eq
 
 _num_lit       ::= [0-9] [0-9]*

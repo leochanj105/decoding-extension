@@ -79,6 +79,14 @@ inline bool BuildTransitions(
     switch (row.need_on_enter) {
       case NeedOnEnter::kInherit: t.need_on_enter = xgrammar::TypeNeedOnEnter::kInherit; break;
       case NeedOnEnter::kNone: t.need_on_enter = xgrammar::TypeNeedOnEnter::kNone; break;
+      case NeedOnEnter::kDerived:
+        t.need_on_enter = xgrammar::TypeNeedOnEnter::kDerived;
+        t.derive_op = oracle.resolve_op ? oracle.resolve_op(row.derive_tag) : -1;
+        if (t.derive_op < 0) {
+          if (error) *error = "the environment does not know the question \"" + row.derive_tag + "\"";
+          return false;
+        }
+        break;
       case NeedOnEnter::kFixed:
         t.need_on_enter = xgrammar::TypeNeedOnEnter::kFixed;
         t.required_type = oracle.resolve ? oracle.resolve(row.require_tag) : -1;
@@ -98,6 +106,9 @@ inline bool BuildTransitions(
       case Finish::kProduceText: t.finish = xgrammar::TypeFinishAction::kProduceText; break;
       case Finish::kRequireText: t.finish = xgrammar::TypeFinishAction::kRequireText; break;
       case Finish::kCheck: t.finish = xgrammar::TypeFinishAction::kCheck; break;
+      case Finish::kProduceRequired:
+        t.finish = xgrammar::TypeFinishAction::kProduceRequired;
+        break;
       case Finish::kCombine:
         t.finish = xgrammar::TypeFinishAction::kCombine;
         t.combine_op = oracle.resolve_op ? oracle.resolve_op(row.combine_tag) : -1;

@@ -153,6 +153,7 @@ int main(int, char** argv) {
       {"let a : number = [ 1 ] ;\n", "an array literal is not a number"},
       {"let a : number[] = [ msg ] ;\n", "an array of strings is not an array of numbers"},
       {"let a : number[] = [ 1 , msg ] ;\n", "a mixed array has no type at all"},
+      {"let a : number = [] ;\n", "an empty array is not a number"},
       {"let a : boolean = true + true ;\n", "booleans do not add"},
       // A declared name must be new. Refused when the name ENDS, not per byte: the
       // prefix of a taken name is a fine start for a free one.
@@ -208,6 +209,11 @@ int main(int, char** argv) {
       "let a : string[] = [ msg , msg ] ;\n",
       "let a : boolean[] = [ true , false ] ;\n",
       "let a : number[] = [ count , 3 ] ;\n",
+      // An empty literal has no element to take a type from, so it takes the
+      // position's: at a number[] position, [] is a number[].
+      "let a : number[] = [] ;\n",
+      "let a : string[] = [] ;\n",
+      "let a : boolean[] = [] ;\n",
       "let a : string = msg + 3 ;\n",
       "let a : string = 3 + msg ;\n",
       "let a : number = count + count ;\n",
@@ -389,6 +395,64 @@ int main(int, char** argv) {
       declared.Poll();
     }
     check(blocked, why);
+  }
+
+  // An argument's requirement is DERIVED from the function being called -- it is
+  // written down nowhere. These need a declared function to have a parameter type
+  // worth deriving, and number[] is chosen because nothing reaches it: no name has
+  // that type and no member returns one. So a name inside the argument is refused
+  // outright, where before this the argument position accepted any name in scope.
+  for (const auto& [text, why] : std::vector<std::pair<std::string, std::string>>{
+           {"declare function h ( a : number[] ) : string ;\nlet s : string = h(msg) ;\n",
+            "a string argument is refused where number[] is wanted"},
+           {"declare function h ( a : number[] ) : string ;\nlet s : string = h(3) ;\n",
+            "and so is a numeric literal"},
+           {"declare function h ( a : number[] ) : string ;\n"
+            "let s : string = h([ msg ]) ;\n",
+            "an array of the wrong element type is refused too"},
+       }) {
+    GrammarMatcher m(compiled);
+    Environment growing = env;
+    Install(m, growing, table, rules);
+    Declarations declared(&growing, &m);
+    Bitmask bm(V);
+    bool blocked = false;
+    for (int32_t id : Tokenize(text, by_text)) {
+      m.FillNextTokenBitmask(&bm.t, 0);
+      if (!bm.allows(id) || !m.AcceptToken(id)) { blocked = true; break; }
+      declared.Poll();
+    }
+    check(blocked, why);
+  }
+
+  // The same requirement, satisfied. The last of these is the mechanism composing
+  // with itself: the argument's type is derived from the function, and then the
+  // empty literal's type is derived from the argument.
+  for (const auto& text : std::vector<std::string>{
+           "declare function h ( a : number[] ) : string ;\nlet s : string = h([ 1 ]) ;\n",
+           "declare function h ( a : number[] ) : string ;\nlet s : string = h([ 1 , 2 ]) ;\n",
+           "declare function h ( a : number[] ) : string ;\nlet s : string = h([]) ;\n",
+       }) {
+    GrammarMatcher m(compiled);
+    Environment growing = env;
+    Install(m, growing, table, rules);
+    Declarations declared(&growing, &m);
+    Bitmask bm(V);
+    bool all = true;
+    std::string got;
+    for (int32_t id : Tokenize(text, by_text)) {
+      m.FillNextTokenBitmask(&bm.t, 0);
+      if (!bm.allows(id) || !m.AcceptToken(id)) {
+        all = false;
+        got += " <<[" + decoded[id] + "]";
+        break;
+      }
+      got += decoded[id];
+      declared.Poll();
+    }
+    check(all, "accepted: " + text.substr(text.find('\n') + 1,
+                                          text.size() - text.find('\n') - 2) +
+                   (all ? "" : "  stopped: " + got));
   }
 
   // A declared name is NOT in scope inside its own declaration: until the statement

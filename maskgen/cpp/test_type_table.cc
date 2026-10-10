@@ -38,6 +38,17 @@ static TypeOracle Oracle() {
     return -1;
   };
   o.accepts = [](int32_t required, int32_t produced) { return required == produced; };
+  o.derive = [](std::string_view question, int32_t need, int32_t have) -> int32_t {
+    // "parameter": what the function being applied takes. Functions are faked here
+    // as 300 + param, since this test has no function types of its own.
+    if (question == "parameter") return have >= 300 ? have - 300 : -1;
+    if (question == "element") {
+      if (need == NUMBER_ARRAY) return NUMBER;
+      if (need == STRING_ARRAY) return STRING;
+      return -1;
+    }
+    return -1;
+  };
   o.resolve_op = [](std::string_view name) -> int32_t {
     if (name == "plus") return 0;
     if (name == "array") return 1;
@@ -200,9 +211,12 @@ int main(int, char**) {
     const Types operand = table.OnEnter("_cmp_operand", Types{BOOLEAN, STRING}, oracle);
     check(operand == Types{-1, -1},
           "a comparison's operand carries no requirement and starts fresh");
+    // An element starts having produced nothing -- inheriting the array's own
+    // accumulated type is the bug that made [1, 2] fail -- and its requirement is
+    // derived from what the array holds rather than inherited.
     const Types element = table.OnEnter("_arr_elem", Types{NUMBER_ARRAY, NUMBER_ARRAY}, oracle);
-    check(element == Types{-1, -1},
-          "an array element does not inherit the array's own accumulated type");
+    check(element == Types{NUMBER, -1},
+          "an array element requires an element, and starts having produced nothing");
     check(table.FixedProduced("_cmp", oracle) == BOOLEAN, "a comparison's type is known in advance");
     check(table.FixedProduced("_lex_name", oracle) == -1, "a name's type is not");
   }
@@ -229,6 +243,38 @@ int main(int, char**) {
           "a string literal produces string");
     check(table.FixedProduced("_bool_lit", oracle) == BOOLEAN,
           "a boolean literal's type is known in advance");
+  }
+
+  // A requirement computed from what encloses the position: written down nowhere,
+  // and the only kind that is neither inherited nor fixed.
+  {
+    TypeTable t; std::string err;
+    check(TypeTable::Parse("_arg enter_need=derive parameter\n"
+                           "_elem enter_need=derive element\n"
+                           "_empty finish=produce_required\n", &t, &err),
+          "enter_need=derive and finish=produce_required parse");
+    TypeTable bad;
+    check(!TypeTable::Parse("_arg enter_need=derive\n", &bad, &err),
+          "enter_need=derive needs a question");
+
+    // An argument takes the parameter type of the function the position has produced.
+    check(t.OnEnter("_arg", Types{STRING, 300 + NUMBER}, oracle).required == NUMBER,
+          "an argument requires what the function takes");
+    check(t.OnEnter("_arg", Types{STRING, NUMBER}, oracle).required == -1,
+          "and nothing, where the position has not produced a function");
+
+    // An element takes what the wanted array holds.
+    check(t.OnEnter("_elem", Types{NUMBER_ARRAY, -1}, oracle).required == NUMBER,
+          "an element requires what the array holds");
+    check(t.OnEnter("_elem", Types{NUMBER, -1}, oracle).required == -1,
+          "and nothing, where the position does not want an array");
+
+    // And a construct with nothing of its own produces what was required of it.
+    check(t.OnFinish("_empty", Types{STRING_ARRAY, -1}, Types{}, "", oracle).produced ==
+              STRING_ARRAY,
+          "an empty literal produces what the position required");
+    check(t.OnFinish("_empty", Types{-1, -1}, Types{-1, NUMBER}, "", oracle).produced == NUMBER,
+          "and leaves it alone where nothing was required");
   }
 
   // An array literal folds its elements into one array type by the same mechanism.

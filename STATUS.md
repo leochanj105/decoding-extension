@@ -29,7 +29,8 @@ declare function f ( a : number ) : string ;          a signature, no body
 
 Expressions: names drawn from the symbol table, member access, calls with and
 without an argument, chains of both (`msg.split(msg).length`), number / string /
-boolean / array literals, `+` typed from both operands, `==`, and parentheses.
+boolean / array literals including `[]`, `+` typed from both operands, `==`, and
+parentheses.
 Whitespace is free everywhere except inside a postfix chain, where it is not allowed.
 
 **A member access hands back the member, and a method is a function.** `msg.split` is
@@ -102,7 +103,7 @@ answers a question no decoder asks.
 
 ```
                                     mean     median      worst      total
-mask generation                   152 us      96 us     761 us    14.3 ms
+mask generation                   160 us      96 us     979 us    15.0 ms
 the same language, none of this   222 us      17 us    1339 us    20.9 ms
 accept and advance one token      2.2 us     1.5 us     9.5 us    0.21 ms
 compiling the grammar                                             121 ms (once)
@@ -111,8 +112,8 @@ compiling the grammar                                             121 ms (once)
 Nine statements, 94 tokens, including calls, an array literal, and two statements
 that use names earlier ones declared.
 
-A model step is about 33,000 µs, so the mean mask is **0.46% of a step** and the worst
-position 2.3%. Against the same language with none of this machinery, the type
+A model step is about 33,000 µs, so the mean mask is **0.48% of a step** and the worst
+position 3.0%. Against the same language with none of this machinery, the type
 checking makes mask generation **faster** — 10.3 ms against 16.6 ms — because cutting
 76,000 candidates to a few hundred costs less than walking them. There is no overhead
 to defend.
@@ -145,8 +146,8 @@ Small, and listed first because they are cheapest:
 
 | | |
 |---|---|
-| **empty array literals** | `[]` has no element to take a type from, so it needs the requirement handed down from its position. Same missing piece as the next row. |
-| **an argument's required type** | the argument of `f(x)` carries no requirement of its own, so a wrongly-typed argument is refused when the argument *ends* rather than at its first token. Correct, just later than it could be. Fixing it needs a requirement computed from context — the thing that was wanted from the start. |
+| **member access on an expression** | only a *name* takes `.member` or `(args)`. `[1, 2].length`, `"abc".length` and `( e ).member` are not writable, where PLDI allows a member access on any expression. |
+| **multi-argument functions** | ours is unary. PLDI accepts a one-argument function where a multi-argument callback is wanted, so this is less limiting than it sounds. |
 
 | | |
 |---|---|

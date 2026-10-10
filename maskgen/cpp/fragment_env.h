@@ -140,6 +140,33 @@ struct Environment {
 
 
 
+/*! \brief The element type of an array type, or -1 if it is not an array. */
+inline int32_t ElementOf(int32_t array) {
+  switch (array) {
+    case T_NUMA: return T_NUM;
+    case T_STRA: return T_STR;
+    case T_BOOLA: return T_BOOL;
+    default: return -1;
+  }
+}
+
+/*!
+ * \brief What a position requires, worked out from what encloses it.
+ *
+ * The requirement that is neither inherited nor written down anywhere. -1 means
+ * unconstrained, which is the safe direction: a mask may offer too much, never too
+ * little.
+ */
+inline int32_t Derive(int32_t question, int32_t enclosing_need, int32_t enclosing_have) {
+  switch (question) {
+    case 0:  // a call argument: the parameter of the function being applied
+      return IsCallable(enclosing_have) ? ParamOf(enclosing_have) : -1;
+    case 1:  // an array element: what the wanted array holds
+      return ElementOf(enclosing_need);
+    default: return -1;
+  }
+}
+
 /*!
  * \brief What an operator does to two types.
  *
@@ -204,11 +231,18 @@ inline TypeOracle OracleFor(const Environment& env) {
     if (name == "plus") return 0;
     if (name == "array") return 1;
     if (name == "apply") return 2;
+    if (name == "parameter") return 0;   // a derive question, not an operator
+    if (name == "element") return 1;
     return -1;
   };
   // TypeScript's `+`: a number only when both operands are numbers, a string as soon
   // as either is one, and nothing otherwise.
   oracle.combine = Combine;
+  oracle.derive = [](std::string_view question, int32_t need, int32_t have) -> int32_t {
+    if (question == "parameter") return Derive(0, need, have);
+    if (question == "element") return Derive(1, need, have);
+    return -1;
+  };
   return oracle;
 }
 
@@ -304,6 +338,7 @@ inline void Install(
   m.SetTypeAcceptor([](int32_t required, int32_t produced) { return required == produced; });
   // A declared name must be new: not already in scope, and not a reserved word.
   // Checked when the name ends, so prefixes are untouched.
+  m.SetTypeDeriver(Derive);
   m.SetNameFilter([&env](int32_t, std::string_view text) {
     return env.symbols.count(std::string(text)) == 0 && !IsReserved(text);
   });

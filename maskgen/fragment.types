@@ -23,6 +23,12 @@
 #                        an operand of == or an element of an array literal
 #   enter_need=<type>    a requirement fixed by the construct, with no text to read:
 #                        the condition of an `if` is a boolean however it is used
+#   enter_need=derive <q>  computed by the environment from what encloses this
+#                        position. The requirement that is neither inherited nor
+#                        written down: a call argument must be the parameter type of
+#                        the function being applied, which is the enclosing
+#                        position's PRODUCED value; an array element must be what the
+#                        wanted array holds, which is its REQUIRED value
 #
 #   enter_have=inherit   carry on from the enclosing position (default). This is what
 #                        makes a continuation work: `.length` after `msg` needs to
@@ -41,6 +47,9 @@
 #                  string, then `.length` makes the whole thing a number
 #   produce <tag>  produce a type the environment names, whatever the text. <tag> is
 #                  a name the environment resolves; it is never a type in this file
+#   produce_required  produce whatever this position was required to produce, for a
+#                  construct correct by construction with nothing of its own to take
+#                  a type from: `[]` is an array of whatever array is wanted
 #   produce_text   produce the type the environment gives for the text matched,
 #                  which is how a name gets the type it was declared with
 #   require_text   set REQUIRED from the text matched, which is how a `: string`
@@ -106,7 +115,12 @@ _sum            finish=combine plus
 # elements by the same mechanism `+` uses: each element combines into what the
 # literal has so far, and a mismatch produces nothing, so the literal cannot finish.
 _arr_lit        gate=environment
-_arr_elem       enter_need=none  enter_have=none   finish=combine array
+# An element must be whatever the wanted array holds, which only the environment can
+# work out from the position -- enter_need=derive is that question.
+_arr_elem       enter_need=derive element  enter_have=none  finish=combine array
+# An empty literal has no element to take a type from, so it produces whatever the
+# position required: at a number[] position, [] is a number[].
+_arr_empty      enter_have=none      finish=produce_required
 _num_lit        finish=produce number
 _str_lit        finish=produce string
 _bool_lit       finish=produce boolean
@@ -126,4 +140,6 @@ _call_step      finish=replace       gate=environment
 # enter_have=none matters here: without it the empty call inherits the function as
 # its own produced value, and applying the function to itself is not what `()` means.
 _call_none      enter_have=none      finish=combine apply
-_arg            enter_need=none  enter_have=none   finish=combine apply
+# An argument must be the parameter type of the function being called, and that
+# function is what the enclosing position has produced.
+_arg            enter_need=derive parameter  enter_have=none  finish=combine apply

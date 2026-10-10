@@ -35,6 +35,7 @@ enum class NeedOnEnter {
   kInherit,  // the enclosing position's requirement (default)
   kNone,     // none: anything may be produced here
   kFixed,    // a fixed type, named by a tag
+  kDerived,  // computed by the environment from what encloses this position
 };
 
 /*! \brief What an occurrence starts out having produced. */
@@ -53,6 +54,7 @@ enum class Finish {
   kRequireText,  // require the type the environment gives for the matched text
   kCheck,        // refuse to finish unless what was produced satisfies the
                  // requirement; having passed, behaves as kKeepFirst
+  kProduceRequired,  // produce whatever this position was required to produce
   kCombine,      // ask the environment to combine what the enclosing position has
                  // produced with what this rule produced, under a named operator
 };
@@ -68,6 +70,8 @@ struct Row {
   std::string require_tag;
   /*! \brief For kCombine: the operator's name, which the environment numbers. */
   std::string combine_tag;
+  /*! \brief For NeedOnEnter::kDerived: which question to ask the environment. */
+  std::string derive_tag;
   /*! \brief The legal text here comes from the symbol table, not the grammar. */
   bool from_lexicon = false;
   /*! \brief The text here may be anything the environment does NOT already know. */
@@ -85,6 +89,8 @@ struct Row {
 struct TypeOracle {
   std::function<int32_t(std::string_view)> resolve;
   std::function<bool(int32_t required, int32_t produced)> accepts;
+  /*! \brief A position's requirement, computed from what encloses it. */
+  std::function<int32_t(std::string_view question, int32_t need, int32_t have)> derive;
   /*! \brief Whether this text may be where a fresh name ends: false for a name the
    *         environment already knows, or a word the language reserves. */
   std::function<bool(std::string_view)> is_fresh;
@@ -142,6 +148,11 @@ class TypeTable {
         // A tag the environment does not know leaves the position unconstrained
         // rather than impossible, which is the safe direction for a mask.
         out.required = oracle.resolve ? oracle.resolve(row.require_tag) : -1;
+        break;
+      case NeedOnEnter::kDerived:
+        out.required = oracle.derive
+                           ? oracle.derive(row.derive_tag, enclosing.required, enclosing.produced)
+                           : -1;
         break;
     }
     out.produced = row.have_on_enter == HaveOnEnter::kInherit ? enclosing.produced : -1;
@@ -203,6 +214,9 @@ class TypeTable {
         if (t >= 0) out.produced = t;
         break;
       }
+      case Finish::kProduceRequired:
+        if (self.required >= 0) out.produced = self.required;
+        break;
       case Finish::kCombine: {
         if (!oracle.combine || !oracle.resolve_op) {
           break;
@@ -294,7 +308,11 @@ inline bool TypeTable::Parse(std::string_view text, TypeTable* out, std::string*
       if (key == "enter_need") {
         if (value == "inherit") row.need_on_enter = NeedOnEnter::kInherit;
         else if (value == "none") row.need_on_enter = NeedOnEnter::kNone;
-        else {
+        else if (value == "derive") {
+          row.need_on_enter = NeedOnEnter::kDerived;
+          if (i + 1 >= words.size()) return fail("enter_need=derive needs a question");
+          row.derive_tag = words[++i];
+        } else {
           row.need_on_enter = NeedOnEnter::kFixed;
           row.require_tag = value;        // anything else names a type
         }
@@ -307,6 +325,7 @@ inline bool TypeTable::Parse(std::string_view text, TypeTable* out, std::string*
         else if (value == "keep_first") row.finish = Finish::kKeepFirst;
         else if (value == "replace") row.finish = Finish::kReplace;
         else if (value == "produce_text") row.finish = Finish::kProduceText;
+        else if (value == "produce_required") row.finish = Finish::kProduceRequired;
         else if (value == "require_text") row.finish = Finish::kRequireText;
         else if (value == "check") row.finish = Finish::kCheck;
         else if (value == "combine") {
