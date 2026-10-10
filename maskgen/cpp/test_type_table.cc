@@ -38,6 +38,17 @@ static TypeOracle Oracle() {
     return -1;
   };
   o.accepts = [](int32_t required, int32_t produced) { return required == produced; };
+  o.resolve_op = [](std::string_view name) -> int32_t { return name == "plus" ? 0 : -1; };
+  // TypeScript's `+`: a number only when both are numbers, a string as soon as
+  // either is one, and nothing otherwise.
+  o.combine = [](int32_t op, int32_t a, int32_t b) -> int32_t {
+    if (op != 0) return -1;
+    if (a < 0) return b;
+    if (b < 0) return a;
+    if (a == STRING || b == STRING) return STRING;
+    if (a == NUMBER && b == NUMBER) return NUMBER;
+    return -1;
+  };
   return o;
 }
 
@@ -84,7 +95,7 @@ int main(int, char**) {
       if (line.find("::=", end) == std::string::npos) continue;
       defined.push_back(line.substr(0, end));
     }
-    check(defined.size() == 15, "the grammar defines 15 underscored rules, found " +
+    check(defined.size() == 16, "the grammar defines 16 underscored rules, found " +
                                     std::to_string(defined.size()));
     std::string missing;
     for (const auto& rule : defined) if (!table.Lists(rule)) missing += " " + rule;
@@ -108,11 +119,11 @@ int main(int, char**) {
 
   // An unlisted rule passes the requirement down and adopts the first type below it.
   {
-    const Types inside = table.OnEnter("primary", Types{STRING, -1}, oracle);
+    const Types inside = table.OnEnter("eq", Types{STRING, -1}, oracle);
     check(inside == Types{STRING, -1}, "an unlisted rule inherits the requirement");
-    const Types after = table.OnFinish("primary", Types{STRING, NUMBER}, Types{STRING, -1}, "", oracle);
+    const Types after = table.OnFinish("eq", Types{STRING, NUMBER}, Types{STRING, -1}, "", oracle);
     check(after.produced == NUMBER, "an unlisted rule carries a produced type up");
-    const Types kept = table.OnFinish("primary", Types{STRING, NUMBER}, Types{STRING, BOOLEAN}, "", oracle);
+    const Types kept = table.OnFinish("eq", Types{STRING, NUMBER}, Types{STRING, BOOLEAN}, "", oracle);
     check(kept.produced == BOOLEAN, "...but does not overwrite one already there");
   }
 
@@ -200,10 +211,23 @@ int main(int, char**) {
           "a boolean literal's type is known in advance");
   }
 
-  // `+` keeps the first operand, which is the documented gap.
+  // `+` is typed from both operands. This is the only action that looks at two
+  // types at once, and the reason it exists: no single operand decides the result.
   {
-    const Types after = table.OnFinish("_sum", Types{-1, STRING}, Types{STRING, NUMBER}, "", oracle);
-    check(after.produced == NUMBER, "sum keeps the first operand's type");
+    const auto plus = [&](int32_t accumulated, int32_t operand) {
+      return table.OnFinish("_primary", Types{-1, operand}, Types{-1, accumulated}, "", oracle)
+          .produced;
+    };
+    check(plus(NUMBER, NUMBER) == NUMBER, "number + number is a number");
+    check(plus(STRING, STRING) == STRING, "string + string is a string");
+    check(plus(NUMBER, STRING) == STRING, "number + string is a string");
+    check(plus(STRING, NUMBER) == STRING, "string + number is a string too");
+    check(plus(-1, NUMBER) == NUMBER, "the first operand stands alone");
+    check(plus(BOOLEAN, NUMBER) == BOOLEAN,
+          "a combination the environment rejects leaves the position as it was");
+    TypeTable bad_combine;
+    check(!TypeTable::Parse("_a finish=combine\n", &bad_combine, &err),
+          "finish=combine needs an operator");
   }
 
   printf("\n%d failure(s)\n", failures);

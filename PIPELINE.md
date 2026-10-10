@@ -36,7 +36,7 @@ _call_step      finish=replace  gate=environment
 
 `enter=` is one of inherit / fresh / require_none / require &lt;tag&gt;. `finish=` is one
 of pass / keep_first / replace / produce &lt;tag&gt; / produce_text / require_text /
-check. A rule with no line behaves as `enter=inherit finish=keep_first`, which is
+check / combine &lt;operator&gt;. A rule with no line behaves as `enter=inherit finish=keep_first`, which is
 right for an ordinary syntactic rule: pass the requirement down, adopt the first
 type produced beneath it.
 
@@ -81,13 +81,20 @@ are checked against each other.
    - inside a `content=lexicon` rule, a byte is refused unless the text so far still
      begins some usable declared name
    - such a rule may only finish where the text is exactly a declared name
-   - a `finish=check` rule may only finish when PRODUCED satisfies REQUIRED
+   - a `finish=check` rule may only finish when PRODUCED satisfies REQUIRED, and
+     then carries PRODUCED outward: checking is a refusal, not a transformation
    - a `gate=environment` rule is refused at entry when the environment says so
    - finishing, a rule's `finish=` action updates the enclosing position
-7. **A rule whose type is fixed is refused at entry** where that type cannot satisfy
-   the requirement. A comparison is a boolean, so it does not begin a string-valued
-   expression. This is what keeps the mask honest: without it the model is offered a
-   first token it could never finish legally.
+7. **A rule whose type is fixed is refused at entry** where that type can never
+   reach the requirement. This is what keeps the mask honest: without it the model
+   is offered a first token it could never finish legally.
+
+   Two different questions live here, and conflating them is a bug either way.
+   *Assignability* — may this expression **stop** here — is exact: a number is not a
+   string. *Reachability* — may it **start** here — is looser: a number begins
+   `3 + msg`, which is a string. The gate asks reachability, the check at the end
+   asks assignability. Asking the exact question at entry refused legal programs
+   until `finish=combine` made the difference visible.
 
 ## Part 3 — the complete list of changes to XGrammar
 
@@ -205,6 +212,10 @@ Not done:
    fix for the category is a test that does both and demands identical masks at
    every step — then the next shortcut that behaves differently for tokens fails the
    day it lands, rather than weeks later.
-3. **An operator's result type is not derived from its operands.** `_sum` keeps the
-   first operand's type, so `3 + "x"` is typed as a number where TypeScript makes it
-   a string. The table line is where that would be fixed.
+3. **Calls have never run in the positive direction.** `f(x)` is always refused,
+   because nothing in the environment is callable, so the half of the type graph
+   that comes from calling a function is untested. It needs function types in the
+   environment, and one further action: the required type of an argument is computed
+   from whatever the function turned out to be, where `enter=require` only names a
+   fixed type. `finish=combine` is the first action that derives a value at runtime,
+   so the shape is now established.

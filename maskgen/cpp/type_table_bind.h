@@ -60,11 +60,9 @@ inline bool BuildTransitions(
         if (generated_id < 0) {
           break;
         }
-        Row carried;
-        carried.enter = row.enter;
-        carried.finish = row.finish;
-        carried.produce_tag = row.produce_tag;
-        carried.require_tag = row.require_tag;
+        Row carried = row;
+        carried.from_lexicon = false;
+        carried.gated = false;
         found.emplace_back(generated_id, carried);
         highest = std::max(highest, generated_id);
         bases.push_back(generated);
@@ -98,6 +96,14 @@ inline bool BuildTransitions(
       case Finish::kProduceText: t.finish = xgrammar::TypeFinishAction::kProduceText; break;
       case Finish::kRequireText: t.finish = xgrammar::TypeFinishAction::kRequireText; break;
       case Finish::kCheck: t.finish = xgrammar::TypeFinishAction::kCheck; break;
+      case Finish::kCombine:
+        t.finish = xgrammar::TypeFinishAction::kCombine;
+        t.combine_op = oracle.resolve_op ? oracle.resolve_op(row.combine_tag) : -1;
+        if (t.combine_op < 0) {
+          if (error) *error = "the environment does not know the operator \"" + row.combine_tag + "\"";
+          return false;
+        }
+        break;
       case Finish::kProduce:
         t.finish = xgrammar::TypeFinishAction::kProduce;
         // The tag is resolved once, here. The grammar and the table name a

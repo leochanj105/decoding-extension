@@ -37,6 +37,10 @@
 #                  which is how a name gets the type it was declared with
 #   require_text   set REQUIRED from the text matched, which is how a `: string`
 #                  annotation constrains what follows it
+#   combine <op>   ask the environment to combine what the enclosing position has
+#                  PRODUCED with what this rule produced, under the named operator.
+#                  The only action that looks at two types at once, and the only way
+#                  to type an operator whose result depends on both operands
 #   check          refuse to finish unless PRODUCED satisfies REQUIRED. Having
 #                  passed, it carries PRODUCED out like keep_first: a check is a
 #                  refusal, not a transformation, and `( count )` has to be able to
@@ -62,10 +66,12 @@ _expr           enter=fresh          finish=check
 # unconstrained by what the comparison itself must satisfy.
 _cmp            finish=produce boolean
 _cmp_operand    enter=require_none   finish=pass
-# `+` keeps the first operand's type. That is wrong for `3 + "x"`, which TypeScript
-# types as a string; deriving an operator's result from both operands is not done
-# yet, and this line is where it would go.
-_sum            finish=keep_first
+# `+` is typed from both operands, which is the only way to get TypeScript's rule
+# right: the result is a number only when both are numbers, and a string as soon as
+# either is one. Each operand combines into what precedes it, and the sum as a whole
+# combines into what encloses it, so `3 + "x" + 4` folds left exactly as it reads.
+_primary        finish=combine plus
+_sum            finish=combine plus
 
 # ---- literals ----
 _num_lit        finish=produce number

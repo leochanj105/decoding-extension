@@ -48,8 +48,8 @@ _expr          ::= eq
 eq             ::= _sum | _cmp
 _cmp           ::= _cmp_operand ws "==" ws _cmp_operand
 _cmp_operand   ::= _sum
-_sum           ::= primary (ws "+" ws primary)*
-primary        ::= _num_lit | _str_lit | _bool_lit | _postfix | "(" ws _expr ws ")"
+_sum           ::= _primary (ws "+" ws _primary)*
+_primary       ::= _num_lit | _str_lit | _bool_lit | _postfix | "(" ws _expr ws ")"
 
 _num_lit       ::= [0-9] [0-9]*
 _str_lit       ::= "\"" [a-zA-Z0-9 _.,!?-]* "\""

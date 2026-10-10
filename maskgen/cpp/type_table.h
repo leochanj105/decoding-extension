@@ -48,6 +48,8 @@ enum class Finish {
   kRequireText,  // require the type the environment gives for the matched text
   kCheck,        // refuse to finish unless what was produced satisfies the
                  // requirement; having passed, behaves as kKeepFirst
+  kCombine,      // ask the environment to combine what the enclosing position has
+                 // produced with what this rule produced, under a named operator
 };
 
 /*! \brief One row of the table. */
@@ -58,6 +60,8 @@ struct Row {
   std::string produce_tag;
   /*! \brief For kRequire: likewise. */
   std::string require_tag;
+  /*! \brief For kCombine: the operator's name, which the environment numbers. */
+  std::string combine_tag;
   /*! \brief The legal text here comes from the symbol table, not the grammar. */
   bool from_lexicon = false;
   /*! \brief Ask the environment before entering this rule at all. */
@@ -73,6 +77,12 @@ struct Row {
 struct TypeOracle {
   std::function<int32_t(std::string_view)> resolve;
   std::function<bool(int32_t required, int32_t produced)> accepts;
+  /*! \brief An operator's number, for a kCombine tag. Operators are not types, so
+   *         they have their own namespace. */
+  std::function<int32_t(std::string_view)> resolve_op;
+  /*! \brief What an operator does to two values. Either may be -1, meaning nothing
+   *         produced yet, and the usual answer is then the other one. */
+  std::function<int32_t(int32_t op, int32_t accumulated, int32_t operand)> combine;
 };
 
 class TypeTable {
@@ -176,6 +186,19 @@ class TypeTable {
         if (t >= 0) out.produced = t;
         break;
       }
+      case Finish::kCombine: {
+        if (!oracle.combine || !oracle.resolve_op) {
+          break;
+        }
+        const int32_t combined =
+            oracle.combine(oracle.resolve_op(row.combine_tag), enclosing.produced, self.produced);
+        // A combination the environment rejects leaves the position alone rather than
+        // erasing it; refusing belongs to whatever checks the position.
+        if (combined >= 0) {
+          out.produced = combined;
+        }
+        break;
+      }
       case Finish::kRequireText: {
         const int32_t t = oracle.resolve ? oracle.resolve(matched) : -1;
         if (t >= 0) out.required = t;
@@ -271,6 +294,11 @@ inline bool TypeTable::Parse(std::string_view text, TypeTable* out, std::string*
         else if (value == "produce_text") row.finish = Finish::kProduceText;
         else if (value == "require_text") row.finish = Finish::kRequireText;
         else if (value == "check") row.finish = Finish::kCheck;
+        else if (value == "combine") {
+          row.finish = Finish::kCombine;
+          if (i + 1 >= words.size()) return fail("finish=combine needs an operator");
+          row.combine_tag = words[++i];
+        }
         else if (value == "produce") {
           row.finish = Finish::kProduce;
           if (i + 1 >= words.size()) return fail("finish=produce needs a tag");

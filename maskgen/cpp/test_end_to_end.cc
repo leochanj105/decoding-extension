@@ -121,6 +121,17 @@ inline TypeOracle OracleFor(const Environment& env) {
     return sym == env.symbols.end() ? -1 : sym->second;
   };
   oracle.accepts = [](int32_t required, int32_t produced) { return required == produced; };
+  oracle.resolve_op = [](std::string_view name) -> int32_t { return name == "plus" ? 0 : -1; };
+  // TypeScript's `+`: a number only when both operands are numbers, a string as soon
+  // as either is one, and nothing otherwise.
+  oracle.combine = [](int32_t op, int32_t a, int32_t b) -> int32_t {
+    if (op != 0) return -1;
+    if (a < 0) return b;
+    if (b < 0) return a;
+    if (a == T_STR || b == T_STR) return T_STR;
+    if (a == T_NUM && b == T_NUM) return T_NUM;
+    return -1;
+  };
   return oracle;
 }
 
@@ -170,6 +181,17 @@ void Install(
       }
   );
   m.SetTypeAcceptor([](int32_t required, int32_t produced) { return required == produced; });
+  // May an expression of this type *start* here -- looser than the acceptor, which
+  // says whether it may stop.
+  m.SetTypeReachable([&env](int32_t from, int32_t to) { return env.reachable(from, to); });
+  m.SetTypeCombiner([](int32_t op, int32_t a, int32_t b) -> int32_t {
+    if (op != 0) return -1;
+    if (a < 0) return b;
+    if (b < 0) return a;
+    if (a == T_STR || b == T_STR) return T_STR;
+    if (a == T_NUM && b == T_NUM) return T_NUM;
+    return -1;
+  });
   // Which group of names a position draws from. A member position draws from the
   // members of the receiver that can still reach what the position requires.
   m.SetLexiconTagResolver(
@@ -308,6 +330,8 @@ int main(int, char** argv) {
       // annotation is legal but nothing can follow it. The refusal lands on the first
       // name, not at the end: there is no point letting the model start.
       {"let a : boolean[] = msg ;\n", "nothing here can produce a boolean[] at all"},
+      {"let a : number = 3 + msg ;\n", "a number plus a string is a string, not a number"},
+      {"let a : number = msg + msg ;\n", "two strings make a string"},
   };
   for (const auto& [text, why] : ill_typed) {
     auto ill = Tokenize(text, by_text);
@@ -349,6 +373,11 @@ int main(int, char** argv) {
       "let a : string = msg.split.join ;\n",
       // No whitespace anywhere, and two statements on one line.
       "let a:number=count;msg=count.toString;",
+      // `+` typed from both operands, which is TypeScript's rule.
+      "let a : string = msg + msg ;\n",
+      "let a : number = count + count ;\n",
+      "let a : string = msg + 3 ;\n",
+      "let a : string = 3 + msg ;\n",
   };
   for (const auto& text : well_typed) {
     auto ok = Tokenize(text, by_text);
