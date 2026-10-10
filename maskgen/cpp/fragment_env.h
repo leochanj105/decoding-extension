@@ -170,12 +170,23 @@ inline int32_t Combine(int32_t op, int32_t accumulated, int32_t operand) {
   }
 }
 
+/*! \brief Words the language keeps for itself, so no variable may be called one. */
+inline bool IsReserved(std::string_view word) {
+  for (const char* kw : {"if", "else", "while", "switch", "for", "function", "return",
+                         "let", "const", "var", "declare", "true", "false",
+                         "number", "string", "boolean"}) {
+    if (word == kw) return true;
+  }
+  return false;
+}
+
 /*! \brief The rules this environment has to recognise by name. */
 struct RuleIds {
   int32_t member_name = -1;
   int32_t call_step = -1;
   int32_t member_step = -1;
   int32_t arr_lit = -1;
+  int32_t decl_name = -1;
 };
 
 /*! \brief What the type table needs from this environment. */
@@ -258,6 +269,11 @@ inline void Install(
       }
   );
   m.SetTypeAcceptor([](int32_t required, int32_t produced) { return required == produced; });
+  // A declared name must be new: not already in scope, and not a reserved word.
+  // Checked when the name ends, so prefixes are untouched.
+  m.SetNameFilter([&env](int32_t, std::string_view text) {
+    return env.symbols.count(std::string(text)) == 0 && !IsReserved(text);
+  });
   // May an expression of this type *start* here -- looser than the acceptor, which
   // says whether it may stop.
   m.SetTypeReachable([&env](int32_t from, int32_t to) { return env.reachable(from, to); });

@@ -54,6 +54,12 @@
 #                  refusal, not a transformation, and `( count )` has to be able to
 #                  tell the expression around it that it is a number
 #
+# content=fresh    the text here may be anything the environment does NOT already
+#                  know: a name being DECLARED may not be one already in scope, nor
+#                  a word the language reserves. Asked when the name ends, never per
+#                  byte, because `cou` is a fine start for a new name even when
+#                  `count` is taken. The complement of content=lexicon
+#
 # content=lexicon  the legal text here is not in the grammar: it comes from the
 #                  symbol table, and a byte is refused as soon as no name in scope
 #                  still matches what has been written. Such a rule is also named
@@ -67,7 +73,7 @@
 # ---- a declared name, which constrains nothing and produces nothing ----
 # It has a row only because every underscored rule must, and underscored only because
 # the caller finds it by name. Its capture is what matters, not its types.
-_decl_name      finish=pass
+_decl_name      finish=pass          content=fresh
 
 # ---- where a requirement enters the parse ----
 _type_ann       finish=require_text

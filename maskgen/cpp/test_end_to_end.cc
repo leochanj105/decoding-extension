@@ -154,6 +154,12 @@ int main(int, char** argv) {
       {"let a : number[] = [ msg ] ;\n", "an array of strings is not an array of numbers"},
       {"let a : number[] = [ 1 , msg ] ;\n", "a mixed array has no type at all"},
       {"let a : boolean = true + true ;\n", "booleans do not add"},
+      // A declared name must be new. Refused when the name ENDS, not per byte: the
+      // prefix of a taken name is a fine start for a free one.
+      {"let count : string = msg ;\n", "count is already in scope"},
+      {"let msg : boolean = true ;\n", "so is msg, whatever type it is given"},
+      {"let let : number = 3 ;\n", "let is a reserved word"},
+      {"let number : number = 3 ;\n", "so is a type's name"},
   };
   for (const auto& [text, why] : ill_typed) {
     auto ill = Tokenize(text, by_text);
@@ -206,6 +212,11 @@ int main(int, char** argv) {
       "let a : string = 3 + msg ;\n",
       "let a : number = count + count ;\n",
       "let a : string = msg + msg ;\n",
+      // A new name that merely extends one in scope is fine, which is what makes the
+      // check belong at the end of the name rather than on its bytes.
+      "let counter : number = 3 ;\n",
+      "let co : number = 3 ;\n",
+      "let fresh : number = 3 ;\n",
   };
   for (const auto& text : well_typed) {
     auto ok = Tokenize(text, by_text);
@@ -269,6 +280,34 @@ int main(int, char** argv) {
     check(growing.symbols.count("n") == 1 && growing.symbols.count("s") == 1,
           "the environment grew");
     check(env.symbols.count("n") == 0, "and the original environment did not");
+  }
+
+  // The blacklist grows with the program: a name is free until it is declared, and
+  // taken afterwards. Without registration feeding it, this could not be tested at
+  // all -- which is why it comes last.
+  {
+    GrammarMatcher m(compiled);
+    Environment growing = env;
+    Install(m, growing, table, rules);
+    Declarations declared(&growing, &m);
+    Bitmask bm(V);
+    auto first = Tokenize("let fresh : number = 3 ;\n", by_text);
+    bool ok = true;
+    for (int32_t id : first) {
+      m.FillNextTokenBitmask(&bm.t, 0);
+      if (!bm.allows(id) || !m.AcceptToken(id)) { ok = false; break; }
+      declared.Poll();
+    }
+    check(ok, "a free name can be declared");
+    // Now the same name is taken, so declaring it again must be refused.
+    auto again = Tokenize("let fresh : string = msg ;\n", by_text);
+    bool blocked = false;
+    for (int32_t id : again) {
+      m.FillNextTokenBitmask(&bm.t, 0);
+      if (!bm.allows(id) || !m.AcceptToken(id)) { blocked = true; break; }
+      declared.Poll();
+    }
+    check(blocked, "and declaring it a second time is refused");
   }
 
   // A declared name is NOT in scope inside its own declaration: until the statement

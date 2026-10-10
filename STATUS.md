@@ -48,7 +48,9 @@ Three files, with one job each:
 
 Declared variables reach the symbol table as the program is written, so a later
 statement can use a name an earlier one declared. A name is not in scope inside its
-own declaration, since nothing is registered until the statement's `;` lands. This
+own declaration, since nothing is registered until the statement's `;` lands. A
+declaration may not reuse a name already in scope, nor a reserved word -- checked
+when the name ends, so `counter` is fine even though `count` is taken. This
 rides on XGrammar's captures, which are recorded only on committed tokens and rolled
 back with the parser -- a hook on the rules would fire thousands of times during mask
 generation, on paths the model never takes. `declare function` does not register

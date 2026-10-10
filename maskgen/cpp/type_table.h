@@ -70,6 +70,8 @@ struct Row {
   std::string combine_tag;
   /*! \brief The legal text here comes from the symbol table, not the grammar. */
   bool from_lexicon = false;
+  /*! \brief The text here may be anything the environment does NOT already know. */
+  bool fresh_name = false;
   /*! \brief Ask the environment before entering this rule at all. */
   bool gated = false;
 };
@@ -83,6 +85,9 @@ struct Row {
 struct TypeOracle {
   std::function<int32_t(std::string_view)> resolve;
   std::function<bool(int32_t required, int32_t produced)> accepts;
+  /*! \brief Whether this text may be where a fresh name ends: false for a name the
+   *         environment already knows, or a word the language reserves. */
+  std::function<bool(std::string_view)> is_fresh;
   /*! \brief An operator's number, for a kCombine tag. Operators are not types, so
    *         they have their own namespace. */
   std::function<int32_t(std::string_view)> resolve_op;
@@ -151,8 +156,13 @@ class TypeTable {
    * evidence it satisfies the requirement, and admitting it would let through text
    * we cannot justify. In practice a complete expression always produces something.
    */
-  bool MayFinish(const std::string& rule, const Types& self, const TypeOracle& oracle) const {
-    if (RowFor(rule).finish != Finish::kCheck) return true;
+  bool MayFinish(
+      const std::string& rule, const Types& self, const TypeOracle& oracle,
+      std::string_view matched = {}
+  ) const {
+    const Row& row = RowFor(rule);
+    if (row.fresh_name && oracle.is_fresh && !oracle.is_fresh(matched)) return false;
+    if (row.finish != Finish::kCheck) return true;
     if (self.required < 0 || !oracle.accepts) return true;
     return oracle.accepts(self.required, self.produced);
   }
@@ -312,8 +322,9 @@ inline bool TypeTable::Parse(std::string_view text, TypeTable* out, std::string*
           return fail("unknown finish action \"" + value + "\"");
         }
       } else if (key == "content") {
-        if (value != "lexicon") return fail("unknown content \"" + value + "\"");
-        row.from_lexicon = true;
+        if (value == "lexicon") row.from_lexicon = true;
+        else if (value == "fresh") row.fresh_name = true;
+        else return fail("unknown content \"" + value + "\"");
       } else if (key == "gate") {
         if (value != "environment") return fail("unknown gate \"" + value + "\"");
         row.gated = true;

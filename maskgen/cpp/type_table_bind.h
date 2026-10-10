@@ -118,6 +118,7 @@ inline bool BuildTransitions(
         break;
     }
     t.from_lexicon = row.from_lexicon;
+    t.fresh_name = row.fresh_name;
     t.gated = row.gated;
     (*out)[id] = t;
   }
