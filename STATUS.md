@@ -154,6 +154,7 @@ Small, and listed first because they are cheapest:
 | | |
 |---|---|
 | **multi-argument functions** | ours is unary. PLDI accepts a one-argument function where a multi-argument callback is wanted, so this is less limiting than it sounds. |
+| **`[].length`** | legal TypeScript, refused here. An empty literal has no element to take a type from, and the six types have no "array of anything", so `[]` exists only where the position wants a specific array. Accepting it needs either `any` -- an exclusion that defines this fragment -- or inference running backwards from `.length`, which nothing here does. Refused in the safe direction: a legal program rejected, never an illegal one accepted. |
 
 | | |
 |---|---|

@@ -155,8 +155,12 @@ int main(int, char** argv) {
       {"let a : number[] = [ msg ] ;\n", "an array of strings is not an array of numbers"},
       {"let a : number[] = [ 1 , msg ] ;\n", "a mixed array has no type at all"},
       {"let a : number = [] ;\n", "an empty array is not a number"},
+      // NOT a win: `[].length` is legal TypeScript and we reject it. An empty
+      // literal has no element type, and the six types have no "array of anything",
+      // so it exists only where the position names the array. Refused in the safe
+      // direction, but a legal program refused all the same -- see STATUS.md.
       {"let a : number = [].length ;\n",
-       "and it may not start a chain either: it has no element type to invent"},
+       "[].length is refused, which is a limitation and not a feature"},
       {"let a : number = \"abc\".toUpperCase() ;\n",
        "a member access on a literal is checked like any other"},
       {"let a : boolean = true + true ;\n", "booleans do not add"},
