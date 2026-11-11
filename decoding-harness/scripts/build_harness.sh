@@ -12,8 +12,13 @@ LIB="$BUILD/xgrammar/libxgrammar.a"
 
 CXX=(g++ -O2 -g -std=c++17 -Wall -Wextra
      -I"$XG/include" -I"$XG/3rdparty/dlpack/include" -I"$XG/3rdparty/picojson" -I"$HERE/src")
-"${CXX[@]}" -c "$HERE/src/prefix_checker.cc" -o "$BUILD/prefix_checker.o"
+objs=()
+for src in "$HERE"/src/*.cc; do
+  obj="$BUILD/$(basename "${src%.cc}").o"
+  "${CXX[@]}" -c "$src" -o "$obj"
+  objs+=("$obj")
+done
 for src in "$HERE"/tests/test_*.cc; do
-  "${CXX[@]}" "$src" "$BUILD/prefix_checker.o" -o "$BUILD/$(basename "${src%.cc}")" "$LIB" -lpthread
+  "${CXX[@]}" "$src" "${objs[@]}" -o "$BUILD/$(basename "${src%.cc}")" "$LIB" -lpthread
 done
 echo "built the harness in $BUILD, linked against $LIB"

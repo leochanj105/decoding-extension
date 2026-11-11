@@ -8,15 +8,20 @@ BUILD="$HERE/build"
 "$HERE/scripts/build_xgrammar.sh"
 "$HERE/scripts/build_harness.sh"
 
-echo "--- tests ---"
-"$BUILD/test_prefix_checker"
+for src in "$HERE"/tests/test_*.cc; do
+  echo "--- $(basename "${src%.cc}") ---"
+  "$BUILD/$(basename "${src%.cc}")"
+done
 
-echo "--- what the adapter calls in XGrammar ---"
-nm -C --undefined-only "$BUILD/prefix_checker.o" | awk '/ U xgrammar::/ {sub(/^ *U /, ""); sub(/\(.*/, ""); print "  " $0}' | sort -u
-if nm -C --undefined-only "$BUILD/prefix_checker.o" | grep -qE 'Bitmask|AdaptiveTokenMask|JumpForward|DraftTree'; then
-  echo "FAIL  the adapter references a mask function"; exit 1
+echo "--- what the harness calls in XGrammar ---"
+for obj in "$BUILD"/*.o; do
+  echo "  $(basename "$obj"):"
+  nm -C --undefined-only "$obj" | awk '/ U xgrammar::/ {sub(/^ *U /, ""); sub(/\(.*/, ""); print "    " $0}' | sort -u
+done
+if nm -C --undefined-only "$BUILD"/*.o | grep -qE 'Bitmask|AdaptiveTokenMask|JumpForward|DraftTree'; then
+  echo "FAIL  the harness references a mask function"; exit 1
 fi
-echo "pass  the adapter references no mask function"
+echo "pass  the harness references no mask function"
 
 echo "--- mask code: absent from the binary, and never entered ---"
 if "$HERE/scripts/check_no_mask_calls.sh" "$BUILD/test_prefix_checker" "$BUILD/xgrammar/libxgrammar.a"; then

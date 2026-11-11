@@ -19,6 +19,8 @@
 
 #include <xgrammar/xgrammar.h>
 
+#include "checker.h"
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -30,7 +32,7 @@ xgrammar::CompiledGrammar CompileWithoutMasks(
     const std::string& ebnf, const std::string& root = "root"
 );
 
-class PrefixChecker {
+class PrefixChecker : public Checker {
  public:
   explicit PrefixChecker(const std::string& ebnf, const std::string& root = "root");
 
@@ -40,12 +42,12 @@ class PrefixChecker {
   //             returns false, and *rejected_at (if non-null) is the offset of
   //             the refused byte.
   // Empty input returns true and changes nothing.
-  bool TryAppend(std::string_view bytes, int* rejected_at = nullptr);
+  bool TryAppend(std::string_view bytes, int* rejected_at = nullptr) override;
 
   // May the program end here?
-  bool CanStop() const;
+  bool CanStop() const override;
 
-  int64_t CommittedBytes() const { return committed_bytes_; }
+  int64_t CommittedBytes() const override { return committed_bytes_; }
 
   // The parser's own print of its state: the number of history rows and the live
   // states of the latest one. For tests.
