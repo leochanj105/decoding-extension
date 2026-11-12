@@ -37,12 +37,20 @@ class PrefixChecker : public Checker {
   explicit PrefixChecker(const std::string& ebnf, const std::string& root = "root");
 
   // Feed `bytes` one at a time, stopping at the first byte the parser refuses.
-  //   accepted: every byte is committed; returns true.
+  //   accepted: every byte is committed; returns true, and *rejected_at (if
+  //             non-null) is -1.
   //   refused:  the committed state is exactly what it was before the call;
   //             returns false, and *rejected_at (if non-null) is the offset of
   //             the refused byte.
   // Empty input returns true and changes nothing.
   bool TryAppend(std::string_view bytes, int* rejected_at = nullptr) override;
+
+  // Test whether TryAppend(bytes) would succeed, without committing anything.
+  //   accepted: returns true, *rejected_at (if non-null) is -1.
+  //   refused:  returns false, *rejected_at (if non-null) is the refused offset.
+  // Either way the state afterwards, including CanStop and CommittedBytes, is exactly
+  // what it was before the call. Empty input returns true and changes nothing.
+  bool Probe(std::string_view bytes, int* rejected_at = nullptr) override;
 
   // May the program end here?
   bool CanStop() const override;
@@ -54,6 +62,12 @@ class PrefixChecker : public Checker {
   std::string DebugState() const;
 
  private:
+  // Feed `bytes` into the parser one at a time. *rejected_at (if non-null) starts at
+  // -1. On the first refused byte, roll back the bytes already taken, set
+  // *rejected_at to its offset, and return false. On success the bytes
+  // stay in the parser (not yet counted in committed_bytes_) and it returns true.
+  bool Advance(std::string_view bytes, int* rejected_at);
+
   xgrammar::GrammarMatcher matcher_;
   int64_t committed_bytes_ = 0;
 };
