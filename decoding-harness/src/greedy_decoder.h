@@ -5,7 +5,7 @@
 //            unique within a list, so this is a total order.
 //   token    accepted if checker.TryAppend(bytes) succeeds. A non-EOS candidate with
 //            empty bytes is refused: it would commit nothing.
-//   EOS      the candidate with token_id == eos_token_id. Accepted only if
+//   EOS      a candidate whose token_id is in eos_token_ids. Accepted only if
 //            checker.CanStop(); it writes nothing and is not recorded. Otherwise it is
 //            refused like any other candidate.
 //   step     one Propose call. max_steps bounds the number of calls.
@@ -26,7 +26,7 @@
 namespace harness {
 
 struct DecodeOptions {
-  int32_t eos_token_id;
+  std::vector<int32_t> eos_token_ids;  // e.g. TokenizerInfo::GetStopTokenIds()
   int max_steps;
 };
 

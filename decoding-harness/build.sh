@@ -6,6 +6,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD="$HERE/build"
 
 "$HERE/scripts/build_xgrammar.sh"
+"$HERE/scripts/fetch_tokenizer.sh"
 "$HERE/scripts/build_harness.sh"
 
 for src in "$HERE"/tests/test_*.cc; do

@@ -30,7 +30,9 @@ DecodeResult GreedyDecode(Checker& checker, CandidateSource& source, const Decod
 
     bool committed = false;
     for (const auto& c : candidates) {
-      if (c.token_id == options.eos_token_id) {
+      bool is_eos = std::find(options.eos_token_ids.begin(), options.eos_token_ids.end(),
+                              c.token_id) != options.eos_token_ids.end();
+      if (is_eos) {
         if (checker.CanStop()) {
           result.outcome = Outcome::kStopped;
           return result;

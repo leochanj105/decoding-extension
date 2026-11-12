@@ -1,0 +1,11 @@
+# Exact versions for scripts/compare_with_python.sh. XGrammar itself is installed from
+# ../xgrammar at the pinned commit, not from PyPI. torch is the CPU-only build from
+# https://download.pytorch.org/whl/cpu; xgrammar imports it but this check never uses it.
+torch==2.5.1
+transformers==4.57.1
+tokenizers==0.22.2
+apache-tvm-ffi==0.1.16
+pydantic==2.14.3
+numpy==2.2.6
+typing-extensions>=4.9.0
+scikit-build-core==1.1.2

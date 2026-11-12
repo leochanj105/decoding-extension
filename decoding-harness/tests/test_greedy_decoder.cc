@@ -39,7 +39,7 @@ static Script Valid() {
 
 static DecodeResult Run(ScriptedSource& source, int max_steps = 10) {
   PrefixChecker checker(kGrammar);  // the grammar is built here, outside the loop
-  return GreedyDecode(checker, source, {kEos, max_steps});
+  return GreedyDecode(checker, source, {{kEos}, max_steps});
 }
 
 static bool Throws(const std::function<void()>& f) {
@@ -94,6 +94,15 @@ static void TestPrematureEos() {
         "EOS before the program can stop is refused; the next candidate is committed");
 }
 
+static void TestSecondEosId() {
+  Script s = Valid();
+  s["let x = 1;"] = {{99, "", 1.0}};  // the second of two EOS ids
+  ScriptedSource source(s);
+  PrefixChecker checker(kGrammar);
+  DecodeResult r = GreedyDecode(checker, source, {{kEos, 99}, 10});
+  check(r.outcome == Outcome::kStopped && r.steps == 6, "any id in eos_token_ids ends the run");
+}
+
 static void TestExhaustion() {
   Script s = Valid();
   s["let x"] = {{20, ";", 0.9}, {21, "", 0.8}, {kEos, "", 0.5}};  // all refused
@@ -133,7 +142,7 @@ static void TestInvalidInput() {
   check(Throws([&] {
           PrefixChecker used(kGrammar);
           used.TryAppend("let ");
-          GreedyDecode(used, source, {kEos, 10});
+          GreedyDecode(used, source, {{kEos}, 10});
         }),
         "a checker that is not fresh is rejected");
 
@@ -155,7 +164,7 @@ static void TestIntegrationAb() {
       {"ab", {{kEos, "", 1.0}}},                                  // EOS accepted
   });
   PrefixChecker checker(R"(root ::= "ab")");
-  DecodeResult r = GreedyDecode(checker, source, {kEos, 10});
+  DecodeResult r = GreedyDecode(checker, source, {{kEos}, 10});
 
   check(r.outcome == Outcome::kStopped && r.bytes == "ab" && r.token_ids == Ids{1, 2} && r.steps == 3,
         "\"ab\": stopped after 3 steps with tokens {1, 2}");
@@ -170,7 +179,7 @@ static void TestFixedVocab() {
   //                        0      1     2      3       4     5
   FixedVocabSource finishes({" = ", ";", "1", "<eos>", "x", "let "});
   PrefixChecker c1(kGrammar);
-  DecodeResult r = GreedyDecode(c1, finishes, {/*eos_token_id=*/3, 10});
+  DecodeResult r = GreedyDecode(c1, finishes, {/*eos_token_ids=*/{3}, 10});
   check(r.outcome == Outcome::kStopped && r.bytes == "let x = 1;" && r.token_ids == Ids{5, 4, 0, 2, 1} &&
             r.steps == 6,
         "fixed list: the grammar alone picks \"let x = 1;\", then EOS");
@@ -178,7 +187,7 @@ static void TestFixedVocab() {
   //                     0     1      2     3      4       5
   FixedVocabSource stuck({"x", " = ", "1", ";", "<eos>", "let "});
   PrefixChecker c2(kGrammar);
-  r = GreedyDecode(c2, stuck, {/*eos_token_id=*/4, 5});
+  r = GreedyDecode(c2, stuck, {/*eos_token_ids=*/{4}, 5});
   check(r.outcome == Outcome::kStepLimit && r.bytes == "let xxxx",
         "fixed list: \"x\" (lowest id) stays valid in the name forever, so the step limit is hit");
 }
@@ -189,6 +198,7 @@ int main() {
   TestPartialRejectionThenAcceptance();
   TestScoreOrderAndTies();
   TestPrematureEos();
+  TestSecondEosId();
   TestExhaustion();
   TestStepLimits();
   TestInvalidInput();
