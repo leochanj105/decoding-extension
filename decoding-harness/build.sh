@@ -25,8 +25,11 @@ fi
 echo "pass  the harness references no mask function"
 
 echo "--- mask code: absent from the binary, and never entered ---"
-if "$HERE/scripts/check_no_mask_calls.sh" "$BUILD/test_prefix_checker" "$BUILD/xgrammar/libxgrammar.a"; then
-  echo "pass  no mask function ran"
-else
-  echo "FAIL  the mask check failed or proved nothing"; exit 1
-fi
+for exe in test_prefix_checker test_exhaustive_mask; do
+  echo "  $exe:"
+  if "$HERE/scripts/check_no_mask_calls.sh" "$BUILD/$exe" "$BUILD/xgrammar/libxgrammar.a"; then
+    echo "pass  no XGrammar mask function ran in $exe"
+  else
+    echo "FAIL  the mask check on $exe failed or proved nothing"; exit 1
+  fi
+done
