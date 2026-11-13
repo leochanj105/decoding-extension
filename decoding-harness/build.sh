@@ -33,3 +33,6 @@ for exe in test_prefix_checker test_exhaustive_mask; do
     echo "FAIL  the mask check on $exe failed or proved nothing"; exit 1
   fi
 done
+
+echo "--- native XGrammar: masks compared bit by bit (not a no-mask check) ---"
+"$BUILD/compare/test_native_equivalence"
