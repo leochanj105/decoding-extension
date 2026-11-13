@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "cases.h"
 #include "exhaustive_mask.h"
 #include "native_mask.h"
 #include "prefix_checker.h"
@@ -162,26 +163,8 @@ static bool CompareWalk(const std::string& grammar_name, const std::string& ebnf
   return same;
 }
 
-struct GrammarCase {
-  std::string name;
-  std::string ebnf;
-  std::vector<std::string> tokens;  // the hand-written sequence, by decoded bytes
-};
-
 int main() {
-  const std::vector<GrammarCase> cases = {
-      {"let", R"(root ::= "let " [a-z]+ " = " [0-9]+ ";")", {"let", " x", " =", " ", "1", "2", ";"}},
-      {"list", R"(root ::= [a-z]+ ("," [a-z]+)*)", {"abc", ",", "de", "f"}},
-      {"string",
-       R"(root ::= "s = \"" [^"]* "\";")",
-       // "é" (C3 A9), "中" (E4 B8 AD), "😀" (F0 9F 98 80), one byte token at a time,
-       // then "é" as one token
-       {"s", " =", " \"", "\xC3", "\xA9", "\xE4", "\xB8", "\xAD", "\xF0", "\x9F", "\x98", "\x80", "\xC3\xA9",
-        "\";"}},
-      {"json",
-       xgrammar::Grammar::BuiltinJSONGrammar().ToString(),
-       {"{\"", "a", "\":", " [", "1", ",", " \"", "\xC3", "\xA9", "\"]", "}"}},
-  };
+  const std::vector<GrammarCase> cases = Cases();
 
   for (const auto& g : cases) {
     Coverage cov;
