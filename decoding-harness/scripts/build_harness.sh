@@ -12,7 +12,7 @@ LIB="$BUILD/xgrammar/libxgrammar.a"
 
 CXX=(g++ -O2 -g -std=c++17 -Wall -Wextra
      -I"$XG/include" -I"$XG/3rdparty/dlpack/include" -I"$XG/3rdparty/picojson" -I"$HERE/src"
-     -DHARNESS_DATA_DIR="\"$HERE/data\"")
+     -DHARNESS_DATA_DIR="\"$HERE/data\"" -DHARNESS_SOURCE_DIR="\"$HERE\"")
 objs=()
 for src in "$HERE"/src/*.cc; do
   obj="$BUILD/$(basename "${src%.cc}").o"

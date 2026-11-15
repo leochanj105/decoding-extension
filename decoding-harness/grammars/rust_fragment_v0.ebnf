@@ -1,0 +1,48 @@
+# Syntax of the Rust fragment in rust_symbol_constraints_v0.md: a function body of
+# let statements followed by a result expression. Syntax only: no rule here checks
+# that a name is declared. Rules are named after the specification's DCG so that later
+# hooks can attach to them; trivia may appear between any two tokens.
+#
+# Known lexical limitation (temporary, not the intended final behavior): identifier
+# does not exclude Rust keywords, so e.g. `let let = 0;` and `{ return }` are accepted.
+# The keyword check comes later.
+
+root ::= ws body ws
+body ::= "{" ws statements result ws "}"
+
+statements ::= "" | let_stmt ws statements
+let_stmt ::= "let" ws1 optional_mut binder ws optional_annotation "=" ws expr ws ";"
+optional_mut ::= "" | "mut" ws1
+binder ::= identifier
+optional_annotation ::= "" | ":" ws type_name ws
+type_name ::= identifier | "Self"
+
+# A `return` directly followed by an identifier character would be one identifier, so
+# ws1 is needed there; before "!" or "(" no space is needed.
+result ::= expr | "return" return_expr ws ";"
+return_expr ::= ws1 expr | ws not_expr | ws paren_expr
+
+expr ::= variable_use | integer | "true" | "false" | "None" | not_expr | paren_expr
+       | method_call | record
+not_expr ::= "!" ws expr
+paren_expr ::= "(" ws expr ws ")"
+variable_use ::= identifier
+method_call ::= variable_use ws "." ws method_name ws "(" ws ")"
+method_name ::= identifier
+
+record ::= record_name ws "{" ws fields "}"
+record_name ::= identifier | "Self"
+fields ::= "" | field ws field_tail
+field ::= field_label ws ":" ws expr | shorthand_field
+field_label ::= identifier
+shorthand_field ::= identifier
+field_tail ::= "" | "," ws | "," ws field ws field_tail
+
+# ASCII only; the standalone "_" is not an identifier.
+identifier ::= [A-Za-z] [A-Za-z0-9_]* | "_" [A-Za-z0-9_]+
+integer ::= [0-9]+ ("usize")?
+
+ws ::= trivia*
+ws1 ::= trivia+
+trivia ::= [ \t\r\n] | line_comment
+line_comment ::= "//" [^\n]*
