@@ -1,0 +1,12 @@
+# Downloads and builds (setup.sh), extracted tasks, baseline results.
+build/
+data/
+results/
+
+# Ownership pilot: generation outputs, server logs, probe inputs/ids/tables.
+ownership-pilot/outputs.jsonl
+ownership-pilot/outputs.md
+ownership-pilot/*.server.log
+ownership-pilot/*.input.txt
+ownership-pilot/*.prefix_ids.txt
+ownership-pilot/*.top20.md
