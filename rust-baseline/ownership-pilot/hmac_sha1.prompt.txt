@@ -1,0 +1,28 @@
+Write one Rust function for a TOTP (one-time password) library.
+
+Target: `hmac_sha1`, a free function in the module `totp`:
+
+    pub fn hmac_sha1(key: &[u8; 64], data: &[u8], len: usize, hash: &mut [u8; 20]) -> i32
+
+Required behavior: HMAC-SHA1 (RFC 2104) of a short message, with a 64-byte zero-padded key.
+- `key` is the key, already zero-padded to 64 bytes (the SHA-1 block size).
+- The message is the first `len` bytes of `data`; `data` may be longer, and its remaining bytes are ignored. Callers ensure `len <= data.len()`.
+- If `len > 64`, return 1 (out of bounds) without computing anything.
+- Otherwise:
+    inner = SHA-1 of (each of the 64 key bytes XOR 0x36), followed by the message;
+    result = SHA-1 of (each of the 64 key bytes XOR 0x5C), followed by the 20 bytes of inner;
+  write `result` into `hash` and return 0.
+- Compute both SHA-1 digests with the function `sha1` below, which is defined in the same module.
+
+Result codes, from the original C library (they are not declared in the Rust module): 0 = OK, 1 = argument out of bounds.
+
+The helper, in the same module (body omitted):
+
+    pub fn sha1(buf: &mut [u8], len: usize, cap: usize, hash: &mut [u8; 20]) -> i32 { ... }
+
+Contract of `sha1(buf, len, cap, hash)`:
+- The message is `buf[..len]`. `buf` is a work buffer and is clobbered: SHA-1 padding is written into it in place after the message.
+- `cap` is the usable capacity of `buf` in bytes. The padded message takes `(len + 9 + 63) / 64 * 64` bytes (192 bytes for a 128-byte message); if that exceeds `cap`, `sha1` returns 1 and computes nothing.
+- On success it writes the 20-byte digest into `hash` and returns 0.
+
+Return only the complete `hmac_sha1` function, its signature and its body, as plain Rust source. Do not include any other item, `use` lines, helper implementations, Markdown, or explanation.

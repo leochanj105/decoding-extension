@@ -1,0 +1,31 @@
+Write one Rust associated function for a Base122 encoder/decoder library.
+
+Target: `BitWriter::new`, declared in `impl<'a> BitWriter<'a>` as
+
+    pub fn new(output: Option<&'a mut [u8]>, len: usize) -> Self
+
+Required behavior. `BitWriter::new(output, len)` returns a writer that has written nothing yet:
+- `output` is stored in the `output` field as given. It is the buffer the writer fills, or `None`.
+- `len` is stored in the `len` field as given. It is the capacity of the output in bytes; the writer cannot write more than `len * 8` bits.
+- `cur_bit`, the number of bits written so far, starts at 0.
+- `count_only` is `true` exactly when `output` is `None`. In that mode the writer only counts bits (to measure the output size) and never writes to a buffer; `len` may then be 0.
+
+Examples:
+- `let mut buf = [0u8; 2]; let w = BitWriter::new(Some(&mut buf), 2);` gives `w.output` = `Some(..)` (the 2-byte buffer), `w.len == 2`, `w.cur_bit == 0`, `w.count_only == false`.
+- `BitWriter::new(None, 0)` gives `output == None`, `len == 0`, `cur_bit == 0`, `count_only == true`.
+
+The surrounding code in the module:
+
+    /// BitWriter is used to write bits to a byte array
+    pub struct BitWriter<'a> {
+        pub output: Option<&'a mut [u8]>,
+        pub len: usize,
+        pub cur_bit: usize,
+        pub count_only: bool,
+    }
+
+    impl<'a> BitWriter<'a> {
+        // <-- the target `new` goes here
+    }
+
+Return only the complete `new` function, its signature and its body, as plain Rust source. Do not include the `impl` block, any other item, Markdown, or explanation.
