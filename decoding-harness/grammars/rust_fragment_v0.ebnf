@@ -2,6 +2,7 @@
 # let statements followed by a result expression. Syntax only: no rule here checks
 # that a name is declared. Rules are named after the specification's DCG so that later
 # hooks can attach to them; trivia may appear between any two tokens.
+# [on_complete] marks rules whose completions are reported to OnComplete (observation only).
 #
 # Known lexical limitation (temporary, not the intended final behavior): identifier
 # does not exclude Rust keywords, so e.g. `let let = 0;` and `{ return }` are accepted.
@@ -26,7 +27,7 @@ expr ::= variable_use | integer | "true" | "false" | "None" | not_expr | paren_e
        | method_call | record
 not_expr ::= "!" ws expr
 paren_expr ::= "(" ws expr ws ")"
-variable_use ::= identifier
+variable_use[on_complete] ::= identifier
 method_call ::= variable_use ws "." ws method_name ws "(" ws ")"
 method_name ::= identifier
 

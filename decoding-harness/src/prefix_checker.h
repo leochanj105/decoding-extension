@@ -22,6 +22,7 @@
 #include "checker.h"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -32,9 +33,17 @@ xgrammar::CompiledGrammar CompileWithoutMasks(
     const std::string& ebnf, const std::string& root = "root"
 );
 
+// Called on every completion of a rule marked [on_complete] in the grammar: the rule name,
+// the matched bytes and their [begin, end) offsets in the accepted input. Observation
+// only. Completions during Probe and refused TryAppend calls are reported too, although
+// that input is then rolled back.
+using OnComplete =
+    std::function<void(const std::string& rule, const std::string& text, int64_t begin, int64_t end)>;
+
 class PrefixChecker : public Checker {
  public:
-  explicit PrefixChecker(const std::string& ebnf, const std::string& root = "root");
+  explicit PrefixChecker(const std::string& ebnf, const std::string& root = "root",
+                         OnComplete on_complete = nullptr);
 
   // Feed `bytes` one at a time, stopping at the first byte the parser refuses.
   //   accepted: every byte is committed; returns true, and *rejected_at (if

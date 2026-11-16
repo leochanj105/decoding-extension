@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Build libxgrammar.a from the existing ../xgrammar checkout, out of tree, into
-# build/xgrammar. Refuses unless that checkout is exactly the pinned upstream commit
-# with no local changes, so the harness never builds against modified XGrammar.
+# build/xgrammar. Refuses unless that checkout is exactly the pinned commit with no
+# local changes: upstream 9aa840b plus our OnComplete extension (branch harness-base).
 #
 # Bindings, XGrammar's own tests and cpptrace are off. cmake/config.cmake sets them
 # with a plain set(), which shadows -D, so the override is a config.cmake in the
 # build directory.
 set -euo pipefail
 
-XG_COMMIT=9aa840b6d16abf094f3e8e2ac9c10465b77656c9
+XG_COMMIT=1db43764be04802cad58b443b2e8bb4e63c315a7
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 XG="$(cd "$HERE/../xgrammar" && pwd)"
 OUT="$HERE/build/xgrammar"

@@ -14,8 +14,10 @@ xgrammar::CompiledGrammar CompileWithoutMasks(const std::string& ebnf, const std
   return compiler.CompileGrammar(ebnf, root);
 }
 
-PrefixChecker::PrefixChecker(const std::string& ebnf, const std::string& root)
-    : matcher_(CompileWithoutMasks(ebnf, root), std::nullopt, /*terminate_without_stop_token=*/true) {}
+PrefixChecker::PrefixChecker(const std::string& ebnf, const std::string& root, OnComplete on_complete)
+    : matcher_(CompileWithoutMasks(ebnf, root), std::nullopt, /*terminate_without_stop_token=*/true) {
+  if (on_complete) matcher_.SetOnComplete(std::move(on_complete));
+}
 
 bool PrefixChecker::Advance(std::string_view bytes, int* rejected_at) {
   // One AcceptString per byte, so a refusal knows its offset. Each accepted byte is
