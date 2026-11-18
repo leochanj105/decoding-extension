@@ -1,5 +1,6 @@
-// Tests for OnComplete: completions of rules marked [on_complete] (in the Rust grammar,
-// variable_use) are reported with the rule name, matched text and [begin, end) offsets.
+// Tests for OnComplete: every completion of a rule marked [on_complete] (in the Rust
+// grammar, variable_use) is reported with the rule name, the matched text and its
+// [begin, end) byte offsets. Only failures are printed.
 #include "prefix_checker.h"
 
 #include <cstdio>
@@ -7,170 +8,166 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using harness::PrefixChecker;
 
 static int failures = 0;
 
-static void Expect(bool ok, const std::string& what) {
-  printf("%s  %s\n", ok ? "pass" : "FAIL", what.c_str());
-  if (!ok) ++failures;
-}
+#define CHECK(condition)                                        \
+  do {                                                          \
+    if (!(condition)) {                                         \
+      printf("FAIL line %d: %s\n", __LINE__, #condition);       \
+      ++failures;                                               \
+    }                                                           \
+  } while (0)
 
-struct Event {
-  std::string rule;
-  std::string text;
-  int64_t begin;
-  int64_t end;
-  bool operator==(const Event& o) const {
-    return rule == o.rule && text == o.text && begin == o.begin && end == o.end;
-  }
-};
-using Events = std::vector<Event>;
+// One reported completion: rule name, matched text, begin, end.
+using Event = std::tuple<std::string, std::string, int64_t, int64_t>;
 
-static std::string Show(const Events& events) {
-  std::string out;
-  for (const auto& e : events) {
-    out += " " + e.rule + " \"" + e.text + "\" [" + std::to_string(e.begin) + "," + std::to_string(e.end) + ")";
-  }
-  return "{" + out + " }";
-}
-
-static void ExpectEvents(const Events& actual, const Events& expected, const std::string& what) {
-  bool ok = actual == expected;
-  printf("%s  %s: %s\n", ok ? "pass" : "FAIL", what.c_str(), Show(actual).c_str());
-  if (!ok) {
-    printf("      expected: %s\n", Show(expected).c_str());
-    ++failures;
-  }
-}
-
-// A callback that appends every report to `events`.
-static harness::OnComplete Into(Events* events) {
-  return [events](const std::string& rule, const std::string& text, int64_t begin, int64_t end) {
+// A callback that records every completion and leaves the environment unchanged.
+static harness::OnComplete RecordInto(std::vector<Event>* events) {
+  return [events](const std::string& rule, const std::string& text, int64_t begin, int64_t end, int32_t env) {
     events->push_back({rule, text, begin, end});
+    return env;
   };
 }
 
-static bool SameState(const PrefixChecker& a, const PrefixChecker& b) {
-  return a.DebugState() == b.DebugState() && a.CommittedBytes() == b.CommittedBytes() &&
-         a.CanStop() == b.CanStop();
-}
-
-static bool Contains(const std::string& text, const std::string& part) {
-  return text.find(part) != std::string::npos;
-}
-
-static std::string ReadFile(const std::string& path) {
-  std::ifstream in(path, std::ios::binary);
+static std::string ReadRustGrammar() {
+  std::ifstream in(HARNESS_SOURCE_DIR "/grammars/rust_fragment_v0.ebnf");
   if (!in) {
-    fprintf(stderr, "cannot read %s\n", path.c_str());
+    printf("cannot read the Rust grammar\n");
     exit(2);
   }
-  std::stringstream ss;
-  ss << in.rdbuf();
-  return ss.str();
+  std::stringstream text;
+  text << in.rdbuf();
+  return text.str();
 }
 
-static const std::string kRust = ReadFile(HARNESS_SOURCE_DIR "/grammars/rust_fragment_v0.ebnf");
+static const std::string kRust = ReadRustGrammar();
 
-static const Events kOut = {
-    {"variable_use", "o", 2, 3},
-    {"variable_use", "ou", 2, 4},
-    {"variable_use", "out", 2, 5},
-};
-static const Events kPut = {
-    {"variable_use", "outp", 2, 6},
-    {"variable_use", "outpu", 2, 7},
-    {"variable_use", "output", 2, 8},
-};
-
-// 1. "{ out", then "put }".
+// After "{ out", the name may still grow or may end; both continuations are tried.
 static void TestOutThenPut() {
-  Events events;
-  PrefixChecker checker(kRust, "root", Into(&events));
+  std::vector<Event> events;
+  PrefixChecker checker(kRust, "root", RecordInto(&events));
 
-  Expect(checker.TryAppend("{ out"), "\"{ out\" is accepted");
-  ExpectEvents(events, kOut, "\"{ out\" reports");
+  // Each byte of "out" completes variable_use once more, always starting at offset 2.
+  CHECK(checker.TryAppend("{ out"));
+  std::vector<Event> expected = {
+      {"variable_use", "o", 2, 3},
+      {"variable_use", "ou", 2, 4},
+      {"variable_use", "out", 2, 5},
+  };
+  CHECK(events == expected);
 
+  // "put }" grows the same name to "output", and the program may then end.
   events.clear();
-  Expect(checker.TryAppend("put }"), "then \"put }\" is accepted");
-  ExpectEvents(events, kPut, "\"put }\" reports");
-  Expect(checker.CanStop(), "the program may end after \"{ output }\"");
+  CHECK(checker.TryAppend("put }"));
+  expected = {
+      {"variable_use", "outp", 2, 6},
+      {"variable_use", "outpu", 2, 7},
+      {"variable_use", "output", 2, 8},
+  };
+  CHECK(events == expected);
+  CHECK(checker.CanStop());
+
+  // Alternatively, " }" ends the name right away: accepted, and nothing new is reported.
+  std::vector<Event> other_events;
+  PrefixChecker other(kRust, "root", RecordInto(&other_events));
+  CHECK(other.TryAppend("{ out"));
+  other_events.clear();
+  CHECK(other.TryAppend(" }"));
+  CHECK(other_events.empty());
+  CHECK(other.CanStop());
 }
 
-// 2. Probe "put }" after "{ out", then append it: the same events.
+// Probing "put }" reports the same completions as appending it afterwards.
 static void TestProbeThenAppend() {
-  Events events;
-  PrefixChecker checker(kRust, "root", Into(&events));
-  checker.TryAppend("{ out");
-  events.clear();
-
-  Expect(checker.Probe("put }"), "Probe \"put }\" is accepted");
-  Events probed = events;
-  ExpectEvents(probed, kPut, "Probe \"put }\" reports");
+  std::vector<Event> events;
+  PrefixChecker checker(kRust, "root", RecordInto(&events));
+  CHECK(checker.TryAppend("{ out"));
 
   events.clear();
-  Expect(checker.TryAppend("put }"), "TryAppend \"put }\" is accepted");
-  ExpectEvents(events, probed, "TryAppend \"put }\" reports the same as the Probe");
+  CHECK(checker.Probe("put }"));
+  std::vector<Event> probed = events;
+  std::vector<Event> expected = {
+      {"variable_use", "outp", 2, 6},
+      {"variable_use", "outpu", 2, 7},
+      {"variable_use", "output", 2, 8},
+  };
+  CHECK(probed == expected);
+
+  events.clear();
+  CHECK(checker.TryAppend("put }"));
+  CHECK(events == probed);
 }
 
-// 3. A failed TryAppend restores the state; later input behaves like a reference checker.
+// A refused TryAppend leaves the checker exactly as a reference checker that never saw
+// it, and later input reports the same completions with the same offsets.
 static void TestFailedTryAppend() {
-  Events events;
-  Events reference_events;
-  PrefixChecker checker(kRust, "root", Into(&events));
-  PrefixChecker reference(kRust, "root", Into(&reference_events));
-  checker.TryAppend("{ out");
-  reference.TryAppend("{ out");
+  std::vector<Event> events;
+  std::vector<Event> reference_events;
+  PrefixChecker checker(kRust, "root", RecordInto(&events));
+  PrefixChecker reference(kRust, "root", RecordInto(&reference_events));
+  CHECK(checker.TryAppend("{ out"));
+  CHECK(reference.TryAppend("{ out"));
 
+  // "pu&" is refused at '&' (offset 2), after "pu" was taken; both bytes are rolled back.
   int rejected_at = -1;
-  Expect(!checker.TryAppend("pu&", &rejected_at), "TryAppend \"pu&\" is refused");
-  Expect(rejected_at == 2, "  ...at the '&' (offset 2)");
-  Expect(SameState(checker, reference), "  ...and the state equals the reference checker's");
+  CHECK(!checker.TryAppend("pu&", &rejected_at));
+  CHECK(rejected_at == 2);
+  CHECK(checker.DebugState() == reference.DebugState());
 
   events.clear();
   reference_events.clear();
-  Expect(checker.TryAppend("put }"), "then \"put }\" is accepted");
-  Expect(reference.TryAppend("put }"), "  ...and by the reference checker");
-  ExpectEvents(events, kPut, "\"put }\" reports");
-  ExpectEvents(reference_events, kPut, "the reference checker reports");
-  Expect(SameState(checker, reference), "  ...and the states are equal");
+  CHECK(checker.TryAppend("put }"));
+  CHECK(reference.TryAppend("put }"));
+  std::vector<Event> expected = {
+      {"variable_use", "outp", 2, 6},
+      {"variable_use", "outpu", 2, 7},
+      {"variable_use", "output", 2, 8},
+  };
+  CHECK(events == expected);
+  CHECK(reference_events == expected);
+  CHECK(checker.DebugState() == reference.DebugState());
 }
 
-static std::string Optimized(const std::string& ebnf) {
-  return harness::CompileWithoutMasks(ebnf).GetGrammar().ToString();
-}
-
-// 4. [on_complete] rules survive optimization, and their callbacks fire.
+// [on_complete] rules survive XGrammar's optimizations, and their callbacks fire in the
+// three places where a completion could otherwise be removed or skipped.
 static void TestSurvival() {
-  Expect(Contains(Optimized(kRust), "variable_use[on_complete] ::="),
-         "the optimized Rust grammar still has variable_use[on_complete]");
+  // The rule is still in the grammar XGrammar actually parses with.
+  std::string optimized = harness::CompileWithoutMasks(kRust).GetGrammar().ToString();
+  CHECK(optimized.find("variable_use[on_complete] ::=") != std::string::npos);
 
-  // Inlining: x refers to no other rule, so without the attribute it is inlined away.
+  // Inlining: x refers to no other rule, so a plain x is inlined away (control), but
+  // x[on_complete] is kept and reports its completion.
+  std::string plain = harness::CompileWithoutMasks("root ::= x \"c\"\nx ::= \"b\"\n").GetGrammar().ToString();
+  CHECK(plain.find("\nx ::=") == std::string::npos);
   const std::string inlinable = "root ::= x \"c\"\nx[on_complete] ::= \"b\"\n";
-  const std::string inlinable_plain = "root ::= x \"c\"\nx ::= \"b\"\n";
-  Expect(!Contains(Optimized(inlinable_plain), "\nx ::="), "control: a plain x is inlined away");
-  Expect(Contains(Optimized(inlinable), "\nx[on_complete] ::="), "x[on_complete] is kept");
-  Events events;
-  PrefixChecker inlined(inlinable, "root", Into(&events));
-  Expect(inlined.TryAppend("bc"), "\"bc\" is accepted");
-  ExpectEvents(events, {{"x", "b", 0, 1}}, "x reports");
+  optimized = harness::CompileWithoutMasks(inlinable).GetGrammar().ToString();
+  CHECK(optimized.find("\nx[on_complete] ::=") != std::string::npos);
+  std::vector<Event> events;
+  PrefixChecker inlined(inlinable, "root", RecordInto(&events));
+  CHECK(inlined.TryAppend("bc"));
+  std::vector<Event> expected = {{"x", "b", 0, 1}};
+  CHECK(events == expected);
 
   // Right recursion: w is the last element of v, so the shortcut would complete v's
   // parent straight from w and skip v's own completion.
   events.clear();
-  PrefixChecker recursive("root ::= \"a\" v\nv[on_complete] ::= \"b\" w\nw ::= \"c\"\n", "root", Into(&events));
-  Expect(recursive.TryAppend("abc"), "\"abc\" is accepted");
-  ExpectEvents(events, {{"v", "bc", 1, 3}}, "v reports");
+  PrefixChecker recursive("root ::= \"a\" v\nv[on_complete] ::= \"b\" w\nw ::= \"c\"\n", "root", RecordInto(&events));
+  CHECK(recursive.TryAppend("abc"));
+  expected = {{"v", "bc", 1, 3}};
+  CHECK(events == expected);
 
-  // Initialization: the root's initial row is expanded when the matcher is built,
-  // before the callback is set; child is the root's last element.
+  // Initialization: child is the root's last element, and the root's first row is
+  // expanded when the matcher is built, before the callback is set.
   events.clear();
-  PrefixChecker initial("root[on_complete] ::= child\nchild[on_complete] ::= \"x\"\n", "root", Into(&events));
-  Expect(initial.TryAppend("x"), "\"x\" is accepted");
-  ExpectEvents(events, {{"child", "x", 0, 1}, {"root", "x", 0, 1}}, "child and root both report");
+  PrefixChecker initial("root[on_complete] ::= child\nchild[on_complete] ::= \"x\"\n", "root", RecordInto(&events));
+  CHECK(initial.TryAppend("x"));
+  expected = {{"child", "x", 0, 1}, {"root", "x", 0, 1}};
+  CHECK(events == expected);
 }
 
 int main() {

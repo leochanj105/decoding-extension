@@ -34,11 +34,12 @@ xgrammar::CompiledGrammar CompileWithoutMasks(
 );
 
 // Called on every completion of a rule marked [on_complete] in the grammar: the rule name,
-// the matched bytes and their [begin, end) offsets in the accepted input. Observation
-// only. Completions during Probe and refused TryAppend calls are reported too, although
-// that input is then rolled back.
-using OnComplete =
-    std::function<void(const std::string& rule, const std::string& text, int64_t begin, int64_t end)>;
+// the matched bytes, their [begin, end) offsets in the accepted input, and the completed
+// occurrence's environment id; returns the id the waiting parent continues with (return
+// env to leave it unchanged). Completions during Probe and refused TryAppend calls are
+// reported too, although that input is then rolled back.
+using OnComplete = std::function<int32_t(const std::string& rule, const std::string& text, int64_t begin,
+                                         int64_t end, int32_t env)>;
 
 class PrefixChecker : public Checker {
  public:

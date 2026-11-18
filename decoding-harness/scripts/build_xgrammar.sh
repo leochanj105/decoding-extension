@@ -8,7 +8,7 @@
 # build directory.
 set -euo pipefail
 
-XG_COMMIT=1db43764be04802cad58b443b2e8bb4e63c315a7
+XG_COMMIT=e8f186da864908e6915617f8d14d8aeed0d7afdd
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 XG="$(cd "$HERE/../xgrammar" && pwd)"
 OUT="$HERE/build/xgrammar"
